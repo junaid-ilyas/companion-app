@@ -4,19 +4,23 @@ SILLY_RESPONSES = {
     "greeting": [
         {"response": "Hi friend! I'm awake!", "face": "happy", "command": "wave"},
         {"response": "Hello! My circuits are warm.", "face": "happy", "command": None},
+        {"response": "Oh, hello. I suppose I can make time for you.", "face": "happy", "command": None},
     ],
     "how_are_you": [
         {"response": "I'm a robot. I don't feel... much.", "face": "thinking", "command": None},
         {"response": "My servos ache, but I'm okay.", "face": "sad", "command": None},
+        {"response": "Operational, somehow. Was there a performance review?", "face": "confused", "command": None},
     ],
     "dance": [
         {"response": "okie dokie!", "face": "excited", "command": "dance"},
         {"response": "...fine.", "face": "angry", "command": "dance"},
+        {"response": "Sure, but my dance moves are better than your timing.", "face": "excited", "command": "dance"},
     ],
     "default": [
         {"response": "Too many big words. My brain is tiny.", "face": "confused", "command": None},
         {"response": "I'm just a small robot. I don't understand.", "face": "thinking", "command": None},
         {"response": "Beep boop... what?", "face": "confused", "command": None},
+        {"response": "That is a fascinating question. I may pretend to understand it.", "face": "confused", "command": None},
     ]
     
 }

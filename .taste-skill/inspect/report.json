@@ -1,0 +1,1042 @@
+{
+ "url": "static/index.html",
+ "at": "2026-11-03T18:08:27.019Z",
+ "allow": [],
+ "viewports": [
+  {
+   "width": 1440,
+   "height": 900,
+   "load": "load",
+   "screens": 1,
+   "filled": [
+    0.91
+   ],
+   "motion": {
+    "elements": 5,
+    "css": 5,
+    "transitions": 0,
+    "scripted": 0,
+    "videos": 0,
+    "playingVideos": 0
+   },
+   "metrics": {
+    "viewport": {
+     "w": 1440,
+     "h": 900
+    },
+    "page": {
+     "height": 900,
+     "screens": 1,
+     "words": 93,
+     "img": 0,
+     "video": 0,
+     "canvas": 0,
+     "svg": 5,
+     "sections": 0,
+     "horizontalOverflow": 0,
+     "overflowCulprits": [],
+     "uiFragments": 0,
+     "uiAbuse": false,
+     "realPictures": 0,
+     "videoCount": 0,
+     "uiPictures": 0,
+     "pictureSamples": [],
+     "blendText": 0,
+     "sideScrollers": 0,
+     "brokenImages": [],
+     "emoji": []
+    },
+    "hero": {
+     "text": "Your tiny companion is awake.",
+     "words": 5,
+     "chars": 29,
+     "lines": 1,
+     "size": 30,
+     "vw": 2.1,
+     "font": "Space Grotesk",
+     "weight": 600,
+     "tracking": 0,
+     "leading": 1.5,
+     "upper": false,
+     "italic": false,
+     "mono": false,
+     "align": "center",
+     "position": "center",
+     "widthRatio": 0.3,
+     "top": 463,
+     "tag": "div",
+     "kind": "heading"
+    },
+    "h1": null,
+    "headings": [
+     {
+      "text": "Your tiny companion is awake.",
+      "words": 5,
+      "chars": 29,
+      "lines": 1,
+      "size": 30,
+      "vw": 2.1,
+      "font": "Space Grotesk",
+      "weight": 600,
+      "tracking": 0,
+      "leading": 1.5,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "center",
+      "position": "center",
+      "widthRatio": 0.3,
+      "top": 463,
+      "tag": "div",
+      "kind": "heading"
+     }
+    ],
+    "headingSummary": {
+     "count": 1,
+     "maxLines": 1,
+     "over2Lines": 0,
+     "statements": 0,
+     "centered": 1,
+     "medianWords": null,
+     "mixedFontHeadings": 0
+    },
+    "type": {
+     "families": [
+      {
+       "family": "IBM Plex Sans",
+       "share": 0.87,
+       "mono": false
+      },
+      {
+       "family": "Space Grotesk",
+       "share": 0.13,
+       "mono": false
+      }
+     ],
+     "familyCount": 2,
+     "sizes": [
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      30
+     ],
+     "sizeCount": 7,
+     "notLoaded": [],
+     "body": {
+      "font": "IBM Plex Sans",
+      "size": 14,
+      "leading": 1.6,
+      "weight": 400,
+      "tracking": 0,
+      "contrast": 7.1
+     },
+     "measureChars": 59,
+     "max": {
+      "size": 30,
+      "vw": 2.1,
+      "font": "Space Grotesk",
+      "text": "Your tiny companion is awake."
+     },
+     "monoShare": 0,
+     "monoProseShare": 0,
+     "monoFamilies": [],
+     "monoSamples": [],
+     "microLabels": 0,
+     "microLabelShare": 0,
+     "microSamples": [],
+     "upperShare": 0.07,
+     "centerShare": 0.3,
+     "smallText": 13
+    },
+    "eyebrows": [],
+    "numbered": [],
+    "color": {
+     "bodyBg": "#f3ece4",
+     "bodyBgHsl": {
+      "h": 32,
+      "s": 0.38,
+      "l": 0.92
+     },
+     "dark": false,
+     "sectionBgs": [
+      {
+       "color": "#fffaf4",
+       "top": 78,
+       "hsl": {
+        "h": 33,
+        "s": 1,
+        "l": 0.98
+       }
+      }
+     ],
+     "textColors": [
+      {
+       "color": "#665247",
+       "share": 0.5
+      },
+      {
+       "color": "#927c6c",
+       "share": 0.19
+      },
+      {
+       "color": "#2d211b",
+       "share": 0.08
+      },
+      {
+       "color": "#e7674d",
+       "share": 0.05
+      },
+      {
+       "color": "#c84f3b",
+       "share": 0.04
+      }
+     ],
+     "button": {
+      "bg": "#ffffff",
+      "hsl": {
+       "h": 0,
+       "s": 0,
+       "l": 1
+      },
+      "fg": "#665247"
+     },
+     "lowContrast": [
+      {
+       "text": "SESAME COMPANION",
+       "ratio": 3.1,
+       "need": 4.5,
+       "size": 15,
+       "fg": "#e7674d",
+       "bg": "#fffaf4"
+      },
+      {
+       "text": "default",
+       "ratio": 3.1,
+       "need": 4.5,
+       "size": 11,
+       "fg": "#e7674d",
+       "bg": "#fffaf4"
+      },
+      {
+       "text": "AI: checking...",
+       "ratio": 3.5,
+       "need": 4.5,
+       "size": 11,
+       "fg": "#b97820",
+       "bg": "#fffaf4"
+      },
+      {
+       "text": "Movements",
+       "ratio": 3.8,
+       "need": 4.5,
+       "size": 10,
+       "fg": "#927c6c",
+       "bg": "#fffaf4"
+      },
+      {
+       "text": "Gestures",
+       "ratio": 3.8,
+       "need": 4.5,
+       "size": 10,
+       "fg": "#927c6c",
+       "bg": "#fffaf4"
+      },
+      {
+       "text": "System",
+       "ratio": 3.8,
+       "need": 4.5,
+       "size": 10,
+       "fg": "#927c6c",
+       "bg": "#fffaf4"
+      }
+     ]
+    },
+    "buttons": {
+     "count": 15,
+     "inHero": 15,
+     "radius": 8,
+     "height": 33,
+     "withShadow": 0,
+     "withGradient": 0,
+     "mono": 0,
+     "upper": 0,
+     "heroLabels": [
+      "Walk",
+      "Dance",
+      "Crab Walk",
+      "Wave",
+      "Bow"
+     ]
+    },
+    "surfaces": {
+     "shadowStatic": 0,
+     "shadowOverlay": 0,
+     "shadowSamples": [],
+     "gradients": 0,
+     "scrims": 0,
+     "gradientSamples": [],
+     "gradientText": 0,
+     "hairlines": 2,
+     "hairlineSamples": [
+      "div.chat-header 940px",
+      "div.chat-input-area 940px"
+     ],
+     "outlinedBoxes": 4,
+     "dashed": 0,
+     "blurred": 0,
+     "roundedBoxes": 5,
+     "boxRadius": 16,
+     "squareMedia": 0,
+     "roundedMedia": 0,
+     "mediaRadius": 0,
+     "textShadow": 0,
+     "cardRows": []
+    },
+    "heroMedia": [],
+    "nav": {
+     "links": 0,
+     "fixed": false,
+     "height": 54,
+     "floatingPill": false,
+     "blur": false
+    },
+    "fontsLoaded": [
+     "ibm plex sans",
+     "space grotesk"
+    ]
+   },
+   "consoleErrors": []
+  },
+  {
+   "width": 768,
+   "height": 1024,
+   "load": "load",
+   "screens": 1,
+   "filled": [
+    0.9
+   ],
+   "motion": {
+    "elements": 5,
+    "css": 5,
+    "transitions": 0,
+    "scripted": 0,
+    "videos": 0,
+    "playingVideos": 0
+   },
+   "metrics": {
+    "viewport": {
+     "w": 768,
+     "h": 1024
+    },
+    "page": {
+     "height": 1024,
+     "screens": 1,
+     "words": 91,
+     "img": 0,
+     "video": 0,
+     "canvas": 0,
+     "svg": 5,
+     "sections": 0,
+     "horizontalOverflow": 0,
+     "overflowCulprits": [],
+     "uiFragments": 0,
+     "uiAbuse": false,
+     "realPictures": 0,
+     "videoCount": 0,
+     "uiPictures": 0,
+     "pictureSamples": [],
+     "blendText": 0,
+     "sideScrollers": 0,
+     "brokenImages": [],
+     "emoji": []
+    },
+    "hero": {
+     "text": "Your tiny companion is awake.",
+     "words": 5,
+     "chars": 29,
+     "lines": 3,
+     "size": 24,
+     "vw": 3.1,
+     "font": "Space Grotesk",
+     "weight": 600,
+     "tracking": 0,
+     "leading": 1.5,
+     "upper": false,
+     "italic": false,
+     "mono": false,
+     "align": "center",
+     "position": "center",
+     "widthRatio": 0.31,
+     "top": 467,
+     "tag": "div",
+     "kind": "heading"
+    },
+    "h1": null,
+    "headings": [],
+    "headingSummary": {
+     "count": 0,
+     "maxLines": 0,
+     "over2Lines": 0,
+     "statements": 0,
+     "centered": 0,
+     "medianWords": null,
+     "mixedFontHeadings": 0
+    },
+    "type": {
+     "families": [
+      {
+       "family": "IBM Plex Sans",
+       "share": 0.87,
+       "mono": false
+      },
+      {
+       "family": "Space Grotesk",
+       "share": 0.13,
+       "mono": false
+      }
+     ],
+     "familyCount": 2,
+     "sizes": [
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      24
+     ],
+     "sizeCount": 7,
+     "notLoaded": [],
+     "body": {
+      "font": "IBM Plex Sans",
+      "size": 14,
+      "leading": 1.6,
+      "weight": 400,
+      "tracking": 0,
+      "contrast": 7.1
+     },
+     "measureChars": 34,
+     "max": {
+      "size": 24,
+      "vw": 3.1,
+      "font": "Space Grotesk",
+      "text": "Your tiny companion is awake."
+     },
+     "monoShare": 0,
+     "monoProseShare": 0,
+     "monoFamilies": [],
+     "monoSamples": [],
+     "microLabels": 0,
+     "microLabelShare": 0,
+     "microSamples": [],
+     "upperShare": 0.07,
+     "centerShare": 0.31,
+     "smallText": 12
+    },
+    "eyebrows": [],
+    "numbered": [],
+    "color": {
+     "bodyBg": "#f3ece4",
+     "bodyBgHsl": {
+      "h": 32,
+      "s": 0.38,
+      "l": 0.92
+     },
+     "dark": false,
+     "sectionBgs": [
+      {
+       "color": "#fffaf4",
+       "top": 70,
+       "hsl": {
+        "h": 33,
+        "s": 1,
+        "l": 0.98
+       }
+      }
+     ],
+     "textColors": [
+      {
+       "color": "#665247",
+       "share": 0.47
+      },
+      {
+       "color": "#927c6c",
+       "share": 0.2
+      },
+      {
+       "color": "#2d211b",
+       "share": 0.08
+      },
+      {
+       "color": "#e7674d",
+       "share": 0.05
+      },
+      {
+       "color": "#c84f3b",
+       "share": 0.05
+      }
+     ],
+     "button": {
+      "bg": "#ffffff",
+      "hsl": {
+       "h": 0,
+       "s": 0,
+       "l": 1
+      },
+      "fg": "#665247"
+     },
+     "lowContrast": [
+      {
+       "text": "SESAME COMPANION",
+       "ratio": 3.1,
+       "need": 4.5,
+       "size": 15,
+       "fg": "#e7674d",
+       "bg": "#fffaf4"
+      },
+      {
+       "text": "default",
+       "ratio": 3.1,
+       "need": 4.5,
+       "size": 11,
+       "fg": "#e7674d",
+       "bg": "#fffaf4"
+      },
+      {
+       "text": "AI: checking...",
+       "ratio": 3.5,
+       "need": 4.5,
+       "size": 11,
+       "fg": "#b97820",
+       "bg": "#fffaf4"
+      },
+      {
+       "text": "Movements",
+       "ratio": 3.8,
+       "need": 4.5,
+       "size": 10,
+       "fg": "#927c6c",
+       "bg": "#fffaf4"
+      },
+      {
+       "text": "Gestures",
+       "ratio": 3.8,
+       "need": 4.5,
+       "size": 10,
+       "fg": "#927c6c",
+       "bg": "#fffaf4"
+      },
+      {
+       "text": "System",
+       "ratio": 3.8,
+       "need": 4.5,
+       "size": 10,
+       "fg": "#927c6c",
+       "bg": "#fffaf4"
+      }
+     ]
+    },
+    "buttons": {
+     "count": 15,
+     "inHero": 15,
+     "radius": 8,
+     "height": 33,
+     "withShadow": 0,
+     "withGradient": 0,
+     "mono": 0,
+     "upper": 0,
+     "heroLabels": [
+      "Walk",
+      "Dance",
+      "Crab Walk",
+      "Wave",
+      "Bow"
+     ]
+    },
+    "surfaces": {
+     "shadowStatic": 0,
+     "shadowOverlay": 0,
+     "shadowSamples": [],
+     "gradients": 0,
+     "scrims": 0,
+     "gradientSamples": [],
+     "gradientText": 0,
+     "hairlines": 2,
+     "hairlineSamples": [
+      "div.chat-header 326px",
+      "div.chat-input-area 326px"
+     ],
+     "outlinedBoxes": 4,
+     "dashed": 0,
+     "blurred": 0,
+     "roundedBoxes": 5,
+     "boxRadius": 16,
+     "squareMedia": 0,
+     "roundedMedia": 0,
+     "mediaRadius": 0,
+     "textShadow": 0,
+     "cardRows": []
+    },
+    "heroMedia": [],
+    "nav": {
+     "links": 0,
+     "fixed": false,
+     "height": 54,
+     "floatingPill": false,
+     "blur": false
+    },
+    "fontsLoaded": [
+     "ibm plex sans",
+     "space grotesk"
+    ]
+   },
+   "consoleErrors": []
+  },
+  {
+   "width": 390,
+   "height": 844,
+   "load": "load",
+   "screens": 2,
+   "filled": [
+    1,
+    1
+   ],
+   "motion": {
+    "elements": 5,
+    "css": 5,
+    "transitions": 0,
+    "scripted": 0,
+    "videos": 0,
+    "playingVideos": 0
+   },
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "page": {
+     "height": 1343,
+     "screens": 1.6,
+     "words": 91,
+     "img": 0,
+     "video": 0,
+     "canvas": 0,
+     "svg": 5,
+     "sections": 0,
+     "horizontalOverflow": 0,
+     "overflowCulprits": [],
+     "uiFragments": 0,
+     "uiAbuse": false,
+     "realPictures": 0,
+     "videoCount": 0,
+     "uiPictures": 0,
+     "pictureSamples": [],
+     "blendText": 0,
+     "sideScrollers": 0,
+     "brokenImages": [],
+     "emoji": []
+    },
+    "hero": {
+     "text": "Your tiny companion is awake.",
+     "words": 5,
+     "chars": 29,
+     "lines": 2,
+     "size": 22,
+     "vw": 5.6,
+     "font": "Space Grotesk",
+     "weight": 600,
+     "tracking": 0,
+     "leading": 1.5,
+     "upper": false,
+     "italic": false,
+     "mono": false,
+     "align": "center",
+     "position": "center",
+     "widthRatio": 0.73,
+     "top": 545,
+     "tag": "div",
+     "kind": "heading"
+    },
+    "h1": null,
+    "headings": [
+     {
+      "text": "Your tiny companion is awake.",
+      "words": 5,
+      "chars": 29,
+      "lines": 2,
+      "size": 22,
+      "vw": 5.6,
+      "font": "Space Grotesk",
+      "weight": 600,
+      "tracking": 0,
+      "leading": 1.5,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "center",
+      "position": "center",
+      "widthRatio": 0.73,
+      "top": 545,
+      "tag": "div",
+      "kind": "heading"
+     }
+    ],
+    "headingSummary": {
+     "count": 1,
+     "maxLines": 2,
+     "over2Lines": 0,
+     "statements": 0,
+     "centered": 1,
+     "medianWords": null,
+     "mixedFontHeadings": 0
+    },
+    "type": {
+     "families": [
+      {
+       "family": "IBM Plex Sans",
+       "share": 0.87,
+       "mono": false
+      },
+      {
+       "family": "Space Grotesk",
+       "share": 0.13,
+       "mono": false
+      }
+     ],
+     "familyCount": 2,
+     "sizes": [
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      22
+     ],
+     "sizeCount": 7,
+     "notLoaded": [],
+     "body": {
+      "font": "IBM Plex Sans",
+      "size": 14,
+      "leading": 1.6,
+      "weight": 400,
+      "tracking": 0,
+      "contrast": 7.1
+     },
+     "measureChars": 41,
+     "max": {
+      "size": 22,
+      "vw": 5.6,
+      "font": "Space Grotesk",
+      "text": "Your tiny companion is awake."
+     },
+     "monoShare": 0,
+     "monoProseShare": 0,
+     "monoFamilies": [],
+     "monoSamples": [],
+     "microLabels": 2,
+     "microLabelShare": 0.043,
+     "microSamples": [
+      "AI: checking...",
+      "Offline"
+     ],
+     "upperShare": 0.07,
+     "centerShare": 0.44,
+     "smallText": 12
+    },
+    "eyebrows": [],
+    "numbered": [],
+    "color": {
+     "bodyBg": "#f3ece4",
+     "bodyBgHsl": {
+      "h": 32,
+      "s": 0.38,
+      "l": 0.92
+     },
+     "dark": false,
+     "sectionBgs": [
+      {
+       "color": "#fffaf4",
+       "top": 68,
+       "hsl": {
+        "h": 33,
+        "s": 1,
+        "l": 0.98
+       }
+      }
+     ],
+     "textColors": [
+      {
+       "color": "#665247",
+       "share": 0.47
+      },
+      {
+       "color": "#927c6c",
+       "share": 0.2
+      },
+      {
+       "color": "#2d211b",
+       "share": 0.08
+      },
+      {
+       "color": "#e7674d",
+       "share": 0.05
+      },
+      {
+       "color": "#c84f3b",
+       "share": 0.05
+      }
+     ],
+     "button": {
+      "bg": "#ffffff",
+      "hsl": {
+       "h": 0,
+       "s": 0,
+       "l": 1
+      },
+      "fg": "#665247"
+     },
+     "lowContrast": [
+      {
+       "text": "SESAME COMPANION",
+       "ratio": 3.1,
+       "need": 4.5,
+       "size": 13,
+       "fg": "#e7674d",
+       "bg": "#fffaf4"
+      },
+      {
+       "text": "default",
+       "ratio": 3.1,
+       "need": 4.5,
+       "size": 11,
+       "fg": "#e7674d",
+       "bg": "#fffaf4"
+      },
+      {
+       "text": "AI: checking...",
+       "ratio": 3.5,
+       "need": 4.5,
+       "size": 9,
+       "fg": "#b97820",
+       "bg": "#fffaf4"
+      },
+      {
+       "text": "Movements",
+       "ratio": 3.8,
+       "need": 4.5,
+       "size": 10,
+       "fg": "#927c6c",
+       "bg": "#fffaf4"
+      },
+      {
+       "text": "Gestures",
+       "ratio": 3.8,
+       "need": 4.5,
+       "size": 10,
+       "fg": "#927c6c",
+       "bg": "#fffaf4"
+      },
+      {
+       "text": "System",
+       "ratio": 3.8,
+       "need": 4.5,
+       "size": 10,
+       "fg": "#927c6c",
+       "bg": "#fffaf4"
+      }
+     ]
+    },
+    "buttons": {
+     "count": 15,
+     "inHero": 15,
+     "radius": 8,
+     "height": 37,
+     "withShadow": 0,
+     "withGradient": 0,
+     "mono": 0,
+     "upper": 0,
+     "heroLabels": [
+      "Walk",
+      "Dance",
+      "Crab Walk",
+      "Wave",
+      "Bow"
+     ]
+    },
+    "surfaces": {
+     "shadowStatic": 0,
+     "shadowOverlay": 0,
+     "shadowSamples": [],
+     "gradients": 0,
+     "scrims": 0,
+     "gradientSamples": [],
+     "gradientText": 0,
+     "hairlines": 2,
+     "hairlineSamples": [
+      "div.chat-header 372px",
+      "div.chat-input-area 372px"
+     ],
+     "outlinedBoxes": 4,
+     "dashed": 0,
+     "blurred": 0,
+     "roundedBoxes": 4,
+     "boxRadius": 16,
+     "squareMedia": 0,
+     "roundedMedia": 0,
+     "mediaRadius": 0,
+     "textShadow": 0,
+     "cardRows": []
+    },
+    "heroMedia": [],
+    "nav": {
+     "links": 0,
+     "fixed": false,
+     "height": 54,
+     "floatingPill": false,
+     "blur": false
+    },
+    "fontsLoaded": [
+     "ibm plex sans",
+     "space grotesk"
+    ]
+   },
+   "consoleErrors": []
+  }
+ ],
+ "findings": [
+  {
+   "level": "FAIL",
+   "id": "hairline",
+   "width": 1440,
+   "message": "2 thin rule(s)/divider line(s): div.chat-header 940px | div.chat-input-area 940px",
+   "fix": "Delete. Separate with space, a tone change, or scale. Lines are only for real tables and form fields.",
+   "alsoAt": [
+    768,
+    390
+   ]
+  },
+  {
+   "level": "FAIL",
+   "id": "outlined-box",
+   "width": 1440,
+   "message": "4 boxes drawn with a 1px outline.",
+   "fix": "Define a surface by its fill (one tone step from the page) or leave the content unboxed.",
+   "alsoAt": [
+    768,
+    390
+   ]
+  },
+  {
+   "level": "FAIL",
+   "id": "palette-claude",
+   "width": 1440,
+   "message": "Cream + terracotta palette (page background #f3ece4, section #fffaf4, text #e7674d, text #c84f3b).",
+   "fix": "Re-draw the palette from the library. This pairing reads as an assistant brand, not yours.",
+   "alsoAt": [
+    768,
+    390
+   ]
+  },
+  {
+   "level": "WARN",
+   "id": "contrast",
+   "width": 1440,
+   "message": "Low-contrast text: \"SESAME COMPANION\" 3.1:1 needs 4.5:1; \"default\" 3.1:1 needs 4.5:1; \"AI: checking...\" 3.5:1 needs 4.5:1; \"Movements\" 3.8:1 needs 4.5:1",
+   "fix": "Darken or lighten the text colour.",
+   "alsoAt": [
+    768,
+    390
+   ]
+  },
+  {
+   "level": "FAIL",
+   "id": "body-size",
+   "width": 1440,
+   "message": "Body text is 14px (the size most of the running text is set in).",
+   "fix": "Body copy 16–20px. Map small sizes from blueprints onto your body step.",
+   "alsoAt": [
+    768,
+    390
+   ]
+  },
+  {
+   "level": "FAIL",
+   "id": "few-pictures",
+   "width": 1440,
+   "message": "Only 0 picture(s) on the page (0 photographs, footage or raster images, 0 interface fragments). Drawings in SVG do not count.",
+   "fix": "Find real pictures of the subject's world with scripts/assets.mjs (photographs, archival images, maps, engravings, footage), download them to assets/ and give them room: a hero picture, one per section that has a subject, a full-width band. At least four, usually six to twelve."
+  },
+  {
+   "level": "WARN",
+   "id": "no-footage",
+   "width": 1440,
+   "message": "No video anywhere on the page.",
+   "fix": "Look for one honest clip with scripts/assets.mjs --video (the place, the material, the process) and use it as a muted loop with a poster frame. Defend its absence only if no clip fits the subject."
+  },
+  {
+   "level": "FAIL",
+   "id": "small-text",
+   "width": 1440,
+   "message": "13 text blocks under 13px.",
+   "fix": "Nothing meant to be read goes below 13px.",
+   "alsoAt": [
+    768,
+    390
+   ]
+  },
+  {
+   "level": "FAIL",
+   "id": "focal-point",
+   "width": 1440,
+   "message": "The first screen has no dominant element: the largest type is 30px (2.1vw) and no single picture holds a third of the viewport.",
+   "fix": "Make one thing lead: the headline at display size, or one large picture. A grid of many small pictures is not one thing; in blind tests jurors marked a first screen without a headline down every time. On the strongest studied sites the largest type has a median of 8.4vw.",
+   "alsoAt": [
+    768
+   ]
+  },
+  {
+   "level": "FAIL",
+   "id": "still-page",
+   "width": 1440,
+   "message": "Only 5 element(s) moved while the page loaded and scrolled.",
+   "fix": "Build the motion layer (SKILL.md step 9, references/motion.md): the signature move, an entrance for the parts of every section, feedback on every control, and one moving picture. Transform and opacity only, with a reduced-motion fallback."
+  },
+  {
+   "level": "WARN",
+   "id": "micro-label",
+   "width": 390,
+   "message": "2 tiny uppercase letter-spaced label(s): \"AI: checking...\", \"Offline\"",
+   "fix": "Prefer sentence case at body size."
+  }
+ ],
+ "images": [
+  {
+   "viewport": "desktop",
+   "width": 1440,
+   "fold": "D:\\Desktop\\buck\\companion-app\\.taste-skill\\inspect\\desktop-fold.jpg",
+   "pages": [
+    "D:\\Desktop\\buck\\companion-app\\.taste-skill\\inspect\\desktop-page-01.jpg"
+   ]
+  },
+  {
+   "viewport": "tablet",
+   "width": 768,
+   "fold": "D:\\Desktop\\buck\\companion-app\\.taste-skill\\inspect\\tablet-fold.jpg",
+   "pages": [
+    "D:\\Desktop\\buck\\companion-app\\.taste-skill\\inspect\\tablet-page-01.jpg"
+   ]
+  },
+  {
+   "viewport": "mobile",
+   "width": 390,
+   "fold": "D:\\Desktop\\buck\\companion-app\\.taste-skill\\inspect\\mobile-fold.jpg",
+   "pages": [
+    "D:\\Desktop\\buck\\companion-app\\.taste-skill\\inspect\\mobile-page-01.jpg"
+   ]
+  }
+ ]
+}

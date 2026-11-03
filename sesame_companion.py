@@ -672,50 +672,66 @@ class GroqInterface:
         self.timeout_seconds = float(os.getenv("GROQ_TIMEOUT_SECONDS", "8"))
 
     def interpret_command(self, user_input: str) -> Dict[str, Any]:
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(self._call_groq, user_input)
-                result = future.result(timeout=self.timeout_seconds)
-                result["source"] = "groq"
-                return result
-        except concurrent.futures.TimeoutError as exc:
+            future = executor.submit(self._call_groq, user_input)
+            result = future.result(timeout=self.timeout_seconds)
+            result["source"] = "groq"
+            return result
+        except concurrent.futures.TimeoutError:
             print(f"[WARNING] Groq request timed out after {self.timeout_seconds}s. Falling back to local response.")
-            from local_fallback import get_local_response
-            fallback = get_local_response(user_input, self.personality)
-            fallback["source"] = "local_fallback"
-            return fallback
         except Exception as exc:
             print(f"[WARNING] Groq failed ({type(exc).__name__}: {exc}). Falling back to local response.")
-            from local_fallback import get_local_response
-            fallback = get_local_response(user_input, self.personality)
-            fallback["source"] = "local_fallback"
-            return fallback
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+        fallback = get_local_response(user_input, self.personality)
+        fallback["source"] = "local_fallback"
+        return fallback
 
     def _call_groq(self, user_input: str) -> Dict[str, Any]:
         if self.personality == "intelligent":
-            prompt = INTELLIGENT_PROMPT + f"\n\nUser: {user_input}\n\nRespond with JSON only:"
+            personality = "Be calm, articulate, and helpful."
         else:
-            prompt = SYSTEM_PROMPT + f"\n\nUser: {user_input}\n\nRespond with JSON only:"
+            personality = "Be silly, warm, and simple. Occasionally be sarcastic or playfully annoyed, but stay friendly and never cruel."
+
+        prompt = f"""You are Sesame, a small robot companion. {personality}
+Return exactly one valid JSON object and nothing else.
+Use exactly these fields: command, face, response, reasoning.
+command must be null or one of: {', '.join(AVAILABLE_COMMANDS)}.
+face must be null or one of: {', '.join(AVAILABLE_FACES)}.
+Use command only when the user directly requests an action. Otherwise use command=null.
+Use a face for conversation. A greeting may use command=wave and face=happy.
+Keep response to one or two short sentences. Keep reasoning to one short sentence.
+User: {user_input}"""
 
         chat_completion = self.client.chat.completions.create(
-             messages=[
-                 {"role": "system", "content": "You are Sesame, a small, chatty robot. Your name is Sesame. Never say your name is 'I'.         Always introduce yourself as Sesame."},
-                    {"role": "user", "content": prompt}
-             ],
-        model=self.model,
-        temperature=0.9,
-        max_tokens=256,
-)
-        
-        
-        text = chat_completion.choices[0].message.content.strip()
+            messages=[
+                {"role": "system", "content": "You are Sesame, a small, chatty robot. Your name is Sesame. Never say your name is 'I'. Always introduce yourself as Sesame."},
+                {"role": "user", "content": prompt},
+            ],
+            model=self.model,
+            temperature=0.9,
+            max_completion_tokens=1024,
+            reasoning_effort="low",
+            response_format={"type": "json_object"},
+        )
 
-        if text.startswith("```json"): text = text[7:]
-        if text.startswith("```"): text = text[3:]
-        if text.endswith("```"): text = text[:-3]
-        
-        result = json.loads(text)
-        result["source"] = "groq"
+        message = chat_completion.choices[0].message
+        text = (message.content or "").strip()
+        if not text:
+            raise ValueError("Groq returned empty message content")
+
+        if text.startswith("```json"):
+            text = text[7:]
+        elif text.startswith("```"):
+            text = text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+
+        result = json.loads(text.strip())
+        if not isinstance(result, dict):
+            raise ValueError("Groq JSON response was not an object")
         return result
     
 class SesameCompanionApp:

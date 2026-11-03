@@ -9,6 +9,7 @@ import sys
 import json
 import time
 import threading
+import traceback
 import webview
 
 try:
@@ -88,6 +89,8 @@ class Api:
             self._start_status_poller()
 
         except Exception as e:
+            print(f"[ERROR] Backend initialization failed: {type(e).__name__}: {e}")
+            traceback.print_exc()
             self._js(f"addMessage('error', 'Failed to initialize: {self._escape_js(str(e))}')")
 
     def _check_connection(self):
@@ -113,8 +116,8 @@ class Api:
                 try:
                     if self._app:
                         self._check_connection()
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[WARNING] Status poll failed: {type(e).__name__}: {e}")
         t = threading.Thread(target=poll, daemon=True)
         t.start()
 
@@ -309,6 +312,7 @@ class Api:
 
 
 def main():
+    print("[INFO] Starting Sesame Robot Companion")
     api = Api()
 
     # Resolve path to static files
@@ -335,13 +339,21 @@ def main():
 
     def on_loaded():
         """Called when the webview window is ready."""
+        print("[INFO] Webview loaded; initializing backend")
         # Initialize backend in background thread
         threading.Thread(target=api._initialize_backend, daemon=True).start()
 
+    def on_closed():
+        print("[INFO] Webview closed")
+
     window.events.loaded += on_loaded
+    window.events.closed += on_closed
 
     # Start the window (blocks until closed)
-    webview.start(debug=False)
+    try:
+        webview.start(debug=False)
+    finally:
+        print("[INFO] webview.start returned; application is exiting")
 
 
 if __name__ == "__main__":

@@ -18,20 +18,20 @@ const RobotFace = (() => {
   let animFrameId = null;
 
   const COLORS = {
-    glowOuter: '#005b8a',
-    glowMid:   '#00a2e0',
-    glowInner: '#00f2fe',
-    mouthColor:'#ff8c42',
-    mouthGlow: '#8a4f20',
-    bg:        '#070a13',
-    screen:    '#1e293b',
-    screenIn:  '#0f172a',
+    glowOuter: '#8f3528',
+    glowMid:   '#c84f3b',
+    glowInner: '#e7674d',
+    mouthColor:'#f4b860',
+    mouthGlow: '#875d2d',
+    bg:        '#f3ece4',
+    screen:    '#d8c7b9',
+    screenIn:  '#fffaf4',
     heartFill: '#5a1827',
     heartStroke:'#e63946',
     heartInner:'#ff4d6d',
-    sleepyDim: '#003b5c',
-    sleepyMid: '#0077a8',
-    sleepyBright:'#00b4d8',
+    sleepyDim: '#a77b51',
+    sleepyMid: '#c99557',
+    sleepyBright:'#e0ad68',
   };
 
   function init() {
@@ -333,7 +333,9 @@ function hideWelcome() {
 }
 
 function addMessage(sender, text) {
-  hideWelcome();
+  if (sender !== 'system' && sender !== 'error' && sender !== 'success') {
+    hideWelcome();
+  }
   const container = document.getElementById('messages-container');
   const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 
@@ -492,6 +494,12 @@ async function updateSetting(key, value) {
     if (result.message) {
       addMessage('system', result.message);
     }
+    if (key === 'personality') {
+      const chip = document.getElementById('personality-chip');
+      if (chip) {
+        chip.textContent = value === 'intelligent' ? 'Intelligent - focused' : 'Silly - playful';
+      }
+    }
   } catch (err) {
     addMessage('error', 'Settings error: ' + err);
   }
@@ -565,6 +573,14 @@ document.addEventListener('DOMContentLoaded', () => {
       e.preventDefault();
       sendMessage();
     }
+  });
+
+  document.querySelectorAll('.prompt-chip').forEach((button) => {
+    button.addEventListener('click', () => {
+      input.value = button.dataset.prompt || '';
+      input.focus();
+      sendMessage();
+    });
   });
 
   // Initialize robot face
