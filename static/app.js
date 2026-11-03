@@ -372,8 +372,15 @@ function escapeHtml(text) {
 
 function setTyping(active) {
   const el = document.getElementById('typing-indicator');
+  const container = document.getElementById('messages-container');
   if (active) {
+    if (container) {
+      container.appendChild(el);
+    }
     el.classList.add('active');
+    requestAnimationFrame(() => {
+      container.scrollTop = container.scrollHeight;
+    });
   } else {
     el.classList.remove('active');
   }

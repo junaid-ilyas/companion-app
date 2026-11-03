@@ -261,7 +261,7 @@ body::before {
 .action-btn.system-demo {
   background: rgba(16, 185, 129, 0.1);
   border-color: rgba(16, 185, 129, 0.2);
-  color: var(--success);
+  color: #3d7049;
 }
 .action-btn.system-demo:hover {
   background: rgba(16, 185, 129, 0.18);
@@ -326,9 +326,16 @@ body::before {
 }
 
 .typing-indicator {
+  align-self: flex-start;
+  width: fit-content;
+  margin: 4px 0 0 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-2);
   font-size: 11px;
   font-weight: 500;
-  color: var(--orange);
+  color: #7b4e10;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -409,7 +416,7 @@ body::before {
 
 .message.user .message-bubble {
   background: var(--cyan-mid);
-  border: 1px solid rgba(59, 130, 246, 0.3);
+  border: 1px solid rgba(143, 53, 40, 0.22);
   border-bottom-right-radius: 4px;
 }
 
@@ -439,7 +446,7 @@ body::before {
 }
 
 .message.sesame .message-text {
-  color: #e2e8f0;
+  color: var(--text-primary);
 }
 
 /* System messages */
@@ -782,14 +789,14 @@ body::before {
   grid-template-columns: auto 1fr;
   gap: 4px 10px;
   padding: 8px 10px;
-  background: rgba(33, 28, 25, 0.72);
+  background: var(--bg-surface-2);
   border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
+  border: 1px solid rgba(111, 78, 59, 0.2);
 }
 
 .metric-label {
   font-size: 11px;
-  color: var(--text-muted);
+  color: #765f52;
   font-weight: 500;
 }
 
@@ -830,7 +837,7 @@ body::before {
 }
 
 .welcome-kicker {
-  color: var(--cyan-mid);
+  color: #b24332;
   font-family: 'Space Grotesk', sans-serif;
   font-size: 11px;
   font-weight: 700;
