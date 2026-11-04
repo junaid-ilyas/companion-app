@@ -39,6 +39,37 @@ WAKE_WORD=hey sesame
 WAKE_WORD_MODE=true
 ```
 
+### Connecting After Wi-Fi Setup
+
+The robot uses two different IP addresses:
+
+- `appIP` (usually `192.168.4.1`) is the temporary setup portal address. Do not use it for the app after configuring Wi-Fi.
+- `networkIP` is the address assigned by your home router. Use this address in `SESAME_ROBOT_IP`.
+
+After saving your home Wi-Fi credentials in the robot portal:
+
+1. Reconnect your laptop to the same home Wi-Fi network as the robot.
+2. Check the robot status response or serial monitor for `networkIP`.
+3. Set that address in `.env`, for example:
+
+   ```env
+   SESAME_ROBOT_IP=192.168.100.29
+   ```
+
+4. Restart the app:
+
+   ```powershell
+   .\.venv\Scripts\python.exe app.py
+   ```
+
+5. Test the robot connection:
+
+   ```powershell
+   curl.exe http://192.168.100.29/api/status
+   ```
+
+The status request should return JSON. If it does not, confirm that the laptop and robot are connected to the same non-guest Wi-Fi network and replace the example address with the robot's current `networkIP`.
+
 ---
 
 ## Running the App
