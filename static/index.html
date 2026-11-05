@@ -195,7 +195,11 @@
           <div class="setting-group-title">TTS Engine</div>
           <div class="radio-group">
             <label class="radio-option">
-              <input type="radio" name="tts" value="pyttsx3" checked onchange="updateSetting('tts', 'pyttsx3')">
+              <input type="radio" name="tts" value="piper" checked onchange="updateSetting('tts', 'piper')">
+              Piper (Local Neural)
+            </label>
+            <label class="radio-option">
+              <input type="radio" name="tts" value="pyttsx3" onchange="updateSetting('tts', 'pyttsx3')">
               pyttsx3 (Local)
             </label>
             <label class="radio-option">

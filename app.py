@@ -36,10 +36,12 @@ class Api:
         self._robot_ip = os.getenv("SESAME_ROBOT_IP", "192.168.1.1")
         self._gemini_api_key = os.getenv("GEMINI_API_KEY", "")
         self._voice_enabled = os.getenv("VOICE_ENABLED", "true").lower() == "true"
-        self._tts_engine = os.getenv("TTS_ENGINE", "pyttsx3")
+        self._tts_engine = os.getenv("TTS_ENGINE", "piper")
         self._wake_word = os.getenv("WAKE_WORD", "hey sesame")
         self._wake_word_mode = os.getenv("WAKE_WORD_MODE", "false").lower() == "true"
         self._personality = "silly"
+        self._wake_thread_started = False
+        self._closing = False
 
     def _set_window(self, window):
         self._window = window
@@ -82,11 +84,24 @@ class Api:
             if warning and warning != "No configuration warning.":
                 self._js(f"addMessage('system', '[Warning] {self._escape_js(warning)}')")
 
+            # Warm up local Whisper STT + Piper neural TTS + mic noise floor once
+            voice_info = self._app.voice.warmup()
+            if voice_info.get("stt_ready"):
+                voice_msg = (
+                    f"[Voice] Local Whisper ({voice_info.get('stt_model')}) + "
+                    f"{self._tts_engine} TTS ready"
+                )
+                self._js(f"addMessage('system', '{self._escape_js(voice_msg)}')")
+            elif voice_info.get("stt_error"):
+                err_msg = f"[Warning] Local STT init issue: {voice_info['stt_error']}"
+                self._js(f"addMessage('system', '{self._escape_js(err_msg)}')")
+
             # Check robot connection
             self._check_connection()
 
-            # Start background status polling
+            # Start background status polling & wake-word listener
             self._start_status_poller()
+            self._start_wake_word_loop()
 
         except Exception as e:
             print(f"[ERROR] Backend initialization failed: {type(e).__name__}: {e}")
@@ -111,15 +126,60 @@ class Api:
     def _start_status_poller(self):
         """Poll robot status every 5 seconds in background."""
         def poll():
-            while True:
+            while not self._closing:
                 time.sleep(5)
                 try:
-                    if self._app:
+                    if self._app and not self._closing:
                         self._check_connection()
                 except Exception as e:
                     print(f"[WARNING] Status poll failed: {type(e).__name__}: {e}")
         t = threading.Thread(target=poll, daemon=True)
         t.start()
+
+    def _start_wake_word_loop(self):
+        """Listen for the wake word in the background when Wake Word Mode is enabled."""
+        if self._wake_thread_started:
+            return
+        self._wake_thread_started = True
+
+        def wake_loop():
+            while not self._closing:
+                if (
+                    not self._app
+                    or not self._voice_enabled
+                    or not self._wake_word_mode
+                    or self._app.voice.is_listening_manual
+                    or self._app.voice.is_speaking
+                ):
+                    time.sleep(0.25)
+                    continue
+
+                try:
+                    remainder = self._app.voice.listen_for_wake_phrase(timeout=2.2)
+                    if (
+                        remainder is None
+                        or self._closing
+                        or not self._wake_word_mode
+                        or self._app.voice.is_listening_manual
+                    ):
+                        time.sleep(0.05)
+                        continue
+
+                    if remainder:
+                        self._js(f"onWakeWordTranscript({json.dumps(remainder)})")
+                        time.sleep(0.5)
+                    else:
+                        self._js("addMessage('system', 'Wake word heard — speak now...')")
+                        followup = self._app.voice.listen(timeout=5)
+                        if followup:
+                            self._js(f"onWakeWordTranscript({json.dumps(followup)})")
+                        else:
+                            self._js("addMessage('system', 'No command heard after wake word')")
+                except Exception as e:
+                    print(f"[WARNING] Wake word loop error: {e}")
+                    time.sleep(0.5)
+
+        threading.Thread(target=wake_loop, daemon=True).start()
 
     def _escape_js(self, text):
         """Escape text for safe JS string insertion."""
@@ -265,9 +325,18 @@ class Api:
             if text:
                 return {"text": text}
             else:
-                return {"error": "No speech detected"}
+                return {
+                    "error": self._app.voice.last_listen_error
+                    or "No speech detected"
+                }
         except Exception as e:
             return {"error": f"Voice error: {e}"}
+
+    def stop_listening(self):
+        """Finish an active manual voice recording immediately."""
+        if self._app and self._app.voice:
+            self._app.voice.stop_listening()
+        return {"stopped": True}
 
     def update_setting(self, key, value):
         """Update a setting and propagate to backend."""
@@ -345,6 +414,9 @@ def main():
         threading.Thread(target=api._initialize_backend, daemon=True).start()
 
     def on_closed():
+        api._closing = True
+        if api._app and api._app.voice:
+            api._app.voice.stop_listening()
         print("[INFO] Webview closed")
 
     window.events.loaded += on_loaded

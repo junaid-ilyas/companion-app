@@ -7,6 +7,7 @@ let isListening = false;
 let isSpeaking = false;
 let currentFace = 'default';
 let welcomeVisible = true;
+let liveRecognition = null;
 
 // ── Robot Face Animation Engine ─────────────────────────────
 const RobotFace = (() => {
@@ -475,19 +476,29 @@ async function refreshStatus() {
 
 async function toggleListening() {
   const micBtn = document.getElementById('mic-btn');
-  if (isListening) return;
+
+  // Clicking mic while already listening finishes recording immediately
+  if (isListening) {
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.stop_listening) {
+      await window.pywebview.api.stop_listening();
+    }
+    return;
+  }
 
   isListening = true;
   micBtn.classList.add('listening');
-  addMessage('system', 'Listening...');
+  addMessage('system', 'Listening... (speak now, or click mic again when done)');
 
   try {
     const result = await window.pywebview.api.toggle_listening();
-    if (result.text) {
-      document.getElementById('chat-input').value = result.text;
-      await sendMessage({ preserveInput: true });
+    if (result && result.text) {
+      const input = document.getElementById('chat-input');
+      input.value = result.text;
+      input.focus();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      await sendMessage({ preserveInput: false });
     } else {
-      addMessage('system', result.error || 'No speech detected');
+      addMessage('system', (result && result.error) || 'No speech detected');
     }
   } catch (err) {
     addMessage('error', 'Voice error: ' + err);
@@ -495,6 +506,14 @@ async function toggleListening() {
     isListening = false;
     micBtn.classList.remove('listening');
   }
+}
+
+// Called from Python background wake-word listener when "Hey Sesame" triggers
+function onWakeWordTranscript(text) {
+  if (!text) return;
+  const input = document.getElementById('chat-input');
+  input.value = text;
+  sendMessage({ preserveInput: false });
 }
 
 async function updateSetting(key, value) {

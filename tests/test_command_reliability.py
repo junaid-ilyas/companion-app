@@ -56,7 +56,7 @@ class FakeRecognizer:
         self.listen_args = (timeout, phrase_time_limit)
         return object()
 
-    def recognize_google(self, _audio):
+    def recognize_sphinx(self, _audio):
         return self.text
 
 
@@ -119,29 +119,59 @@ class CommandReliabilityTests(unittest.TestCase):
         self.assertIn("error", result)
         self.assertIn("status verification failed", result["error"])
 
-    @patch("sesame_companion.sr.Microphone", FakeMicrophone)
     def test_microphone_input_path_returns_transcribed_text(self):
         voice = VoiceInterface(voice_enabled=True)
-        recognizer = FakeRecognizer("walk forward")
-        voice.recognizer = recognizer
+        captured_kwargs = {}
+
+        def fake_capture(**kwargs):
+            captured_kwargs.update(kwargs)
+            return b"\x10\x00" * 8000
+
+        voice._capture_phrase_pcm = fake_capture
+        voice.transcribe_pcm = lambda pcm_bytes: "walk forward"
 
         result = voice.listen(timeout=3)
 
         self.assertEqual(result, "walk forward")
-        self.assertEqual(recognizer.ambient_noise_duration, 0.3)
-        self.assertEqual(recognizer.listen_args, (3, 5))
+        self.assertEqual(captured_kwargs["timeout"], 3.0)
+        self.assertTrue(captured_kwargs["allow_manual_stop"])
 
-    @patch("sesame_companion.sr.Microphone", FakeMicrophone)
     def test_microphone_timeout_is_reported_as_no_input(self):
         voice = VoiceInterface(voice_enabled=True)
 
-        class TimeoutRecognizer(FakeRecognizer):
-            def listen(self, _source, timeout, phrase_time_limit):
-                raise sr.WaitTimeoutError()
+        def timeout_capture(**_kwargs):
+            voice.last_listen_error = "No speech detected"
+            return None
 
-        voice.recognizer = TimeoutRecognizer()
+        voice._capture_phrase_pcm = timeout_capture
 
         self.assertIsNone(voice.listen())
+        self.assertEqual(voice.last_listen_error, "No speech detected")
+
+    def test_wake_phrase_extracts_trailing_command(self):
+        voice = VoiceInterface(voice_enabled=True, wake_word="hey sesame")
+
+        self.assertEqual(
+            voice._extract_wake_remainder("Hey Sesame, do a dance!"),
+            "do a dance!",
+        )
+        self.assertEqual(voice._extract_wake_remainder("Hey Sesame"), "")
+        self.assertIsNone(voice._extract_wake_remainder("good morning friend"))
+
+    def test_api_exposes_only_safe_public_methods_for_pywebview(self):
+        api = Api()
+        public_names = {name for name in dir(api) if not name.startswith("_")}
+        expected = {
+            "get_initial_state",
+            "send_message",
+            "send_command",
+            "run_demo",
+            "get_status",
+            "toggle_listening",
+            "stop_listening",
+            "update_setting",
+        }
+        self.assertEqual(public_names, expected)
 
     def test_api_reports_transcribed_microphone_text(self):
         api = Api.__new__(Api)

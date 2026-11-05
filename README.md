@@ -35,6 +35,9 @@ GEMINI_API_KEY=your_gemini_api_key_here
 # Voice & Speech
 VOICE_ENABLED=true
 TTS_ENGINE=pyttsx3
+# Optional microphone selection; use either index or a name fragment
+# MIC_DEVICE_INDEX=5
+# MIC_DEVICE_NAME=Microphone Array
 WAKE_WORD=hey sesame
 WAKE_WORD_MODE=true
 ```
@@ -122,6 +125,7 @@ These tests cover fallback command detection, AI command recovery, command alias
 
 ### Voice & Audio
 - Speech-to-text via SpeechRecognition (Google Speech API)
+- Optional microphone selection with `MIC_DEVICE_INDEX` or `MIC_DEVICE_NAME`.
 - Text-to-speech options:
   - `pyttsx3` (fast, offline native speech)
   - `gemini` (cloud neural voice synthesis via `google-genai` + `pygame`)

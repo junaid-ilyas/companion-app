@@ -6,11 +6,19 @@ Voice and text interface for controlling the Sesame robot using Google Gemini AI
 
 import os
 import sys
+import re
+import io
+import glob
+import wave
 import json
+import collections
 import requests
 import time
 import threading
 from typing import Optional, Dict, Any
+
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+
 from google import genai
 from google.genai import types
 import speech_recognition as sr
@@ -18,6 +26,25 @@ import pyttsx3
 import numpy as np
 import concurrent.futures
 from local_fallback import detect_command, get_local_response
+
+try:
+    from faster_whisper import WhisperModel
+    FASTER_WHISPER_AVAILABLE = True
+except ImportError:
+    WhisperModel = None
+    FASTER_WHISPER_AVAILABLE = False
+
+try:
+    from piper.voice import PiperVoice
+    PIPER_AVAILABLE = True
+except ImportError:
+    PiperVoice = None
+    PIPER_AVAILABLE = False
+
+try:
+    import pythoncom
+except ImportError:
+    pythoncom = None
 
 
 
@@ -254,85 +281,586 @@ Rules:
 - NEVER set both command and face at the same time (except greeting wave).
 """
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODELS_DIR = os.path.join(BASE_DIR, "models")
+WHISPER_MODELS_DIR = os.path.join(MODELS_DIR, "whisper")
+PIPER_MODELS_DIR = os.path.join(MODELS_DIR, "piper")
+
+WHISPER_DOMAIN_PROMPT = (
+    "Sesame robot companion. Hey Sesame. "
+    "walk, dance, crab walk, wave, bow, pushup, swim, cute, shake, shrug, worm, rest, stop."
+)
+
+SILENCE_HALLUCINATIONS = {
+    "thank you",
+    "thank you.",
+    "thanks for watching",
+    "thanks for watching.",
+    "you",
+    "you.",
+    "bye",
+    "bye.",
+    "...",
+    ".",
+}
+
+
 class VoiceInterface:
-    """Handles voice input and text-to-speech output"""
+    """Handles fast local voice input (faster-whisper + PyAudio) and neural TTS (Piper)."""
+
+    SAMPLE_RATE = 16000
+    CHUNK_SIZE = 1024
 
     def __init__(
         self,
         voice_enabled: bool = True,
-        tts_engine: str = "pyttsx3",
+        tts_engine: str = "piper",
         gemini_api_key: Optional[str] = None,
         wake_word: str = "hey sesame",
     ):
         self.voice_enabled = voice_enabled
-        self.tts_engine_type = tts_engine
+        self.tts_engine_type = (tts_engine or "piper").strip().lower()
         self.gemini_api_key = gemini_api_key
-        self.wake_word = wake_word.lower()
+        self.wake_word = (wake_word or "hey sesame").strip().lower()
+        self.microphone_device_index = self._get_microphone_device_index()
+        self.last_listen_error: Optional[str] = None
 
         self.recognizer = sr.Recognizer()
-        self.recognizer.energy_threshold = 4000
-        self.recognizer.dynamic_energy_threshold = False
-        self.recognizer.pause_threshold = 0.5
+        self.recognizer.energy_threshold = 300
+        self.recognizer.dynamic_energy_threshold = True
+        self.recognizer.pause_threshold = 0.7
+
         self.tts_lock = threading.Lock()
+        self.mic_lock = threading.Lock()
+        self._stop_listen_event = threading.Event()
+        self.is_listening_manual = False
+        self.is_speaking = False
+
+        self._whisper_model = None
+        self._whisper_lock = threading.Lock()
+        self._whisper_model_name = os.getenv("WHISPER_MODEL", "tiny").strip() or "tiny"
+
+        self._piper_voice = None
+        self._piper_voice_loaded_name = None
+        self._piper_lock = threading.Lock()
+        self._piper_voice_name = (
+            os.getenv("PIPER_VOICE", "en_US-lessac-medium").strip()
+            or "en_US-lessac-medium"
+        )
+
+        self._energy_threshold = float(os.getenv("MIC_ENERGY_THRESHOLD", "260"))
+        self._ambient_calibrated = False
 
         if self.tts_engine_type == "gemini" and not self.gemini_api_key:
             print(
-                "[WARNING] Gemini TTS selected but no API key provided. Falling back to pyttsx3."
+                "[WARNING] Gemini TTS selected but no API key provided. Falling back to Piper local TTS."
             )
-            self.tts_engine_type = "pyttsx3"
+            self.tts_engine_type = "piper"
 
-    def listen(self, timeout: int = 5) -> Optional[str]:
-        """Listen for voice input"""
+    @staticmethod
+    def _get_microphone_device_index() -> Optional[int]:
+        configured_index = os.getenv("MIC_DEVICE_INDEX", "").strip()
+        configured_name = os.getenv("MIC_DEVICE_NAME", "").strip().lower()
+
+        if configured_index:
+            try:
+                return int(configured_index)
+            except ValueError as exc:
+                raise ValueError("MIC_DEVICE_INDEX must be an integer") from exc
+
+        if configured_name:
+            for index, name in enumerate(sr.Microphone.list_microphone_names()):
+                if configured_name in name.lower():
+                    return index
+            raise ValueError(
+                f"Microphone matching MIC_DEVICE_NAME was not found: {configured_name}"
+            )
+
+        return None
+
+    def _microphone(self):
+        if self.microphone_device_index is None:
+            return sr.Microphone()
+        return sr.Microphone(device_index=self.microphone_device_index)
+
+    def stop_listening(self):
+        """Signal an active listen() session to finish recording immediately."""
+        self._stop_listen_event.set()
+
+    def _ensure_whisper_model(self):
+        """Load local CTranslate2 faster-whisper model once and keep it warm."""
+        if not FASTER_WHISPER_AVAILABLE:
+            raise RuntimeError(
+                "faster-whisper is not installed. Run: pip install faster-whisper"
+            )
+
+        with self._whisper_lock:
+            if self._whisper_model is not None:
+                return self._whisper_model
+
+            os.makedirs(WHISPER_MODELS_DIR, exist_ok=True)
+            cpu_threads = max(2, min(4, os.cpu_count() or 4))
+
+            # Resolve direct local snapshot folder first to bypass slow huggingface_hub lookup
+            snapshot_candidates = glob.glob(
+                os.path.join(
+                    WHISPER_MODELS_DIR,
+                    f"models--Systran--faster-whisper-{self._whisper_model_name}",
+                    "snapshots",
+                    "*",
+                )
+            )
+            direct_snapshot = next(
+                (
+                    p
+                    for p in snapshot_candidates
+                    if os.path.isfile(os.path.join(p, "model.bin"))
+                ),
+                None,
+            )
+
+            if direct_snapshot:
+                model = WhisperModel(
+                    direct_snapshot,
+                    device="cpu",
+                    compute_type="int8",
+                    cpu_threads=cpu_threads,
+                )
+            else:
+                print(
+                    f"[INFO] Downloading local Whisper model '{self._whisper_model_name}' to {WHISPER_MODELS_DIR}..."
+                )
+                model = WhisperModel(
+                    self._whisper_model_name,
+                    device="cpu",
+                    compute_type="int8",
+                    cpu_threads=cpu_threads,
+                    download_root=WHISPER_MODELS_DIR,
+                    local_files_only=False,
+                )
+
+            # Warm up CTranslate2 & Silero VAD ONNX once so the first mic click has zero lag
+            dummy = np.zeros(3200, dtype=np.float32)
+            list(
+                model.transcribe(
+                    dummy,
+                    beam_size=1,
+                    temperature=0.0,
+                    vad_filter=True,
+                    without_timestamps=True,
+                )[0]
+            )
+            self._whisper_model = model
+            print(
+                f"[OK] Local Whisper STT ready (model={self._whisper_model_name}, int8, threads={cpu_threads})"
+            )
+            return self._whisper_model
+
+    def _ensure_piper_voice(self):
+        """Load local Piper neural ONNX voice once and keep it warm."""
+        if not PIPER_AVAILABLE:
+            raise RuntimeError("piper-tts is not installed. Run: pip install piper-tts")
+
+        with self._piper_lock:
+            if (
+                self._piper_voice is not None
+                and self._piper_voice_loaded_name == self._piper_voice_name
+            ):
+                return self._piper_voice
+
+            os.makedirs(PIPER_MODELS_DIR, exist_ok=True)
+            onnx_path = os.path.join(PIPER_MODELS_DIR, f"{self._piper_voice_name}.onnx")
+            if not os.path.exists(onnx_path):
+                print(
+                    f"[INFO] Downloading Piper voice '{self._piper_voice_name}' to {PIPER_MODELS_DIR}..."
+                )
+                from pathlib import Path
+                from piper.download_voices import download_voice
+
+                download_voice(self._piper_voice_name, Path(PIPER_MODELS_DIR))
+
+            voice = PiperVoice.load(onnx_path)
+            buf = io.BytesIO()
+            with wave.open(buf, "wb") as wf:
+                voice.synthesize_wav("Hi.", wf)
+
+            self._piper_voice = voice
+            self._piper_voice_loaded_name = self._piper_voice_name
+            print(f"[OK] Local Piper TTS ready (voice={self._piper_voice_name})")
+            return self._piper_voice
+
+    def _calibrate_ambient_once(self, duration: float = 0.35):
+        """Measure ambient mic RMS once at startup so listen() has zero startup delay."""
+        if self._ambient_calibrated or not AUDIO_MONITORING_AVAILABLE:
+            return
+        with self.mic_lock:
+            if self._ambient_calibrated:
+                return
+            pa = None
+            stream = None
+            try:
+                pa = pyaudio.PyAudio()
+                open_kwargs = {
+                    "format": pyaudio.paInt16,
+                    "channels": 1,
+                    "rate": self.SAMPLE_RATE,
+                    "input": True,
+                    "frames_per_buffer": self.CHUNK_SIZE,
+                }
+                if self.microphone_device_index is not None:
+                    open_kwargs["input_device_index"] = self.microphone_device_index
+
+                stream = pa.open(**open_kwargs)
+                num_chunks = max(3, int(duration * self.SAMPLE_RATE / self.CHUNK_SIZE))
+                rms_samples = []
+                for _ in range(num_chunks):
+                    raw = stream.read(self.CHUNK_SIZE, exception_on_overflow=False)
+                    arr = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
+                    if arr.size:
+                        rms_samples.append(float(np.sqrt(np.mean(arr * arr))))
+
+                if rms_samples:
+                    ambient = float(np.median(rms_samples))
+                    self._energy_threshold = max(
+                        170.0, min(850.0, ambient * 1.9 + 85.0)
+                    )
+                self._ambient_calibrated = True
+            except Exception as exc:
+                print(f"[WARNING] Initial mic calibration skipped: {exc}")
+            finally:
+                if stream is not None:
+                    try:
+                        stream.stop_stream()
+                        stream.close()
+                    except Exception:
+                        pass
+                if pa is not None:
+                    try:
+                        pa.terminate()
+                    except Exception:
+                        pass
+
+    def warmup(self) -> Dict[str, Any]:
+        """Preload local STT + TTS models and calibrate microphone once on a background thread."""
+        info: Dict[str, Any] = {
+            "stt_ready": False,
+            "stt_model": self._whisper_model_name,
+            "tts_ready": False,
+            "tts_engine": self.tts_engine_type,
+        }
+        try:
+            self._ensure_whisper_model()
+            info["stt_ready"] = True
+        except Exception as exc:
+            print(f"[WARNING] Whisper warmup failed: {exc}")
+            info["stt_error"] = str(exc)
+
+        if PIPER_AVAILABLE:
+            try:
+                self._ensure_piper_voice()
+                info["tts_ready"] = True
+            except Exception as exc:
+                print(f"[WARNING] Piper warmup failed: {exc}")
+                info["tts_error"] = str(exc)
+
+        self._calibrate_ambient_once()
+        return info
+
+    def _capture_phrase_pcm(
+        self,
+        timeout: float = 5.0,
+        phrase_time_limit: float = 10.0,
+        silence_duration: float = 0.65,
+        allow_manual_stop: bool = True,
+        abort_on_manual_request: bool = False,
+    ) -> Optional[bytes]:
+        """Capture 16kHz 16-bit mono PCM speech with a pre-roll buffer and adaptive silence cutoff."""
+        if not AUDIO_MONITORING_AVAILABLE:
+            raise RuntimeError("PyAudio is required for local microphone capture")
+
+        pa = pyaudio.PyAudio()
+        stream = None
+        try:
+            open_kwargs = {
+                "format": pyaudio.paInt16,
+                "channels": 1,
+                "rate": self.SAMPLE_RATE,
+                "input": True,
+                "frames_per_buffer": self.CHUNK_SIZE,
+            }
+            if self.microphone_device_index is not None:
+                open_kwargs["input_device_index"] = self.microphone_device_index
+
+            stream = pa.open(**open_kwargs)
+
+            chunk_sec = self.CHUNK_SIZE / float(self.SAMPLE_RATE)
+            pre_roll = collections.deque(maxlen=5)  # ~320ms pre-roll prevents clipping first syllable
+            frames = []
+            speech_started = False
+            onset_hits = 0
+            silence_chunks = 0
+            max_silence_chunks = max(4, int(silence_duration / chunk_sec))
+            min_speech_chunks = max(4, int(0.28 / chunk_sec))
+            start_wait = time.monotonic()
+            speech_start_time = 0.0
+            threshold = self._energy_threshold
+
+            while True:
+                if abort_on_manual_request and self.is_listening_manual:
+                    return None
+
+                if allow_manual_stop and self._stop_listen_event.is_set():
+                    if speech_started and len(frames) >= 2:
+                        break
+                    self.last_listen_error = "Listening stopped"
+                    return None
+
+                raw = stream.read(self.CHUNK_SIZE, exception_on_overflow=False)
+                arr = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
+                rms = float(np.sqrt(np.mean(arr * arr))) if arr.size else 0.0
+
+                if not speech_started:
+                    pre_roll.append(raw)
+                    if rms >= threshold * 1.35:
+                        onset_hits += 2
+                    elif rms >= threshold:
+                        onset_hits += 1
+                    else:
+                        onset_hits = 0
+                        # Gently adapt ambient floor during quiet idle frames
+                        adapted = rms * 1.9 + 85.0
+                        threshold = 0.94 * threshold + 0.06 * max(170.0, min(850.0, adapted))
+                        self._energy_threshold = threshold
+
+                    if onset_hits >= 2:
+                        speech_started = True
+                        speech_start_time = time.monotonic()
+                        frames.extend(pre_roll)
+                        silence_chunks = 0
+                    elif (time.monotonic() - start_wait) >= timeout:
+                        self.last_listen_error = "No speech detected"
+                        return None
+                else:
+                    frames.append(raw)
+                    if rms < threshold * 0.78:
+                        silence_chunks += 1
+                    else:
+                        silence_chunks = 0
+
+                    spoken_chunks = len(frames)
+                    elapsed_speech = time.monotonic() - speech_start_time
+                    if (
+                        spoken_chunks >= min_speech_chunks
+                        and silence_chunks >= max_silence_chunks
+                    ):
+                        break
+                    if elapsed_speech >= phrase_time_limit:
+                        break
+
+            return b"".join(frames) if frames else None
+        finally:
+            if stream is not None:
+                try:
+                    stream.stop_stream()
+                    stream.close()
+                except Exception:
+                    pass
+            try:
+                pa.terminate()
+            except Exception:
+                pass
+
+    def transcribe_pcm(
+        self, pcm_bytes: bytes, initial_prompt: Optional[str] = None
+    ) -> Optional[str]:
+        """Transcribe 16kHz 16-bit mono PCM bytes locally using faster-whisper."""
+        if not pcm_bytes:
+            return None
+
+        audio_i16 = np.frombuffer(pcm_bytes, dtype=np.int16)
+        if audio_i16.size < int(self.SAMPLE_RATE * 0.18):
+            return None
+
+        audio_f32 = audio_i16.astype(np.float32) / 32768.0
+        peak_rms = float(np.sqrt(np.mean(audio_f32 * audio_f32)))
+        if peak_rms < 0.0025:
+            return None
+
+        model = self._ensure_whisper_model()
+        segments, _info = model.transcribe(
+            audio_f32,
+            beam_size=1,
+            best_of=1,
+            temperature=0.0,
+            max_new_tokens=64,
+            vad_filter=True,
+            vad_parameters=dict(min_silence_duration_ms=320, speech_pad_ms=200),
+            without_timestamps=True,
+            condition_on_previous_text=False,
+            initial_prompt=initial_prompt or WHISPER_DOMAIN_PROMPT,
+        )
+
+        collected = []
+        for seg in segments:
+            seg_text = (seg.text or "").strip()
+            if not seg_text:
+                continue
+            if getattr(seg, "no_speech_prob", 0.0) > 0.82 and getattr(seg, "avg_logprob", 0.0) < -1.0:
+                continue
+            collected.append(seg_text)
+
+        text = " ".join(collected).strip()
+        if not text:
+            return None
+
+        if text.lower().strip(" !?,.") in SILENCE_HALLUCINATIONS and peak_rms < 0.012:
+            return None
+
+        return text
+
+    def listen(self, timeout: int = 5, phrase_time_limit: float = 10.0) -> Optional[str]:
+        """Listen for voice input and transcribe locally with zero startup cutoff."""
         if not self.voice_enabled:
             return None
 
+        self.last_listen_error = None
+        self._stop_listen_event.clear()
+        self.is_listening_manual = True
+
         try:
-            with sr.Microphone() as source:
+            with self.mic_lock:
                 print("Listening...")
-                self.recognizer.adjust_for_ambient_noise(source, duration=0.3)
-                audio = self.recognizer.listen(
-                    source, timeout=timeout, phrase_time_limit=5
+                pcm_bytes = self._capture_phrase_pcm(
+                    timeout=float(timeout),
+                    phrase_time_limit=float(phrase_time_limit),
+                    silence_duration=0.65,
+                    allow_manual_stop=True,
+                    abort_on_manual_request=False,
                 )
 
-                print("Recognizing...")
-                text = self.recognizer.recognize_google(audio)
-                return text
+            if not pcm_bytes:
+                if not self.last_listen_error:
+                    self.last_listen_error = "No speech detected"
+                return None
 
-        except sr.WaitTimeoutError:
-            return None
-        except sr.UnknownValueError:
-            print("[ERROR] Couldn't understand that")
-            return None
-        except sr.RequestError as e:
-            print(f"[ERROR] Speech recognition error: {e}")
-            return None
+            print("Recognizing locally...")
+            text = self.transcribe_pcm(pcm_bytes)
+            if not text:
+                self.last_listen_error = "No speech detected"
+                return None
+
+            return text
+
         except Exception as e:
-            print(f"[ERROR] {e}")
+            print(f"[ERROR] Microphone/STT error: {e}")
+            self.last_listen_error = f"Microphone error: {e}"
             return None
+        finally:
+            self.is_listening_manual = False
+            self._stop_listen_event.clear()
+
+    def _extract_wake_remainder(self, text: str) -> Optional[str]:
+        """Check if text contains the wake word and return any trailing command."""
+        lowered = re.sub(r"[^\w\s]", " ", text.lower())
+        lowered = re.sub(r"\s+", " ", lowered).strip()
+        if not lowered:
+            return None
+
+        candidates = [
+            self.wake_word,
+            "hey sesame",
+            "hi sesame",
+            "ok sesame",
+            "okay sesame",
+            "hey sesami",
+            "sesame",
+        ]
+        # De-duplicate while preserving order
+        seen = set()
+        triggers = []
+        for c in candidates:
+            c_norm = re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", c)).strip()
+            if c_norm and c_norm not in seen:
+                seen.add(c_norm)
+                triggers.append(c_norm)
+
+        for trig in triggers:
+            pattern = rf"\b{re.escape(trig)}\b(.*)$"
+            match = re.search(pattern, lowered)
+            if match:
+                # Extract clean remainder from original text roughly after trigger
+                orig_match = re.search(
+                    rf"{re.escape(trig.split()[-1])}[\s,.:;!?-]*(.*)$",
+                    text,
+                    flags=re.IGNORECASE,
+                )
+                remainder = (orig_match.group(1) if orig_match else match.group(1)).strip()
+                return remainder
+
+        return None
+
+    def listen_for_wake_phrase(self, timeout: float = 2.5) -> Optional[str]:
+        """
+        Listen briefly for the wake word without blocking manual mic clicks.
+        Returns:
+          - None if wake word was NOT detected
+          - "" if ONLY the wake word was spoken (caller should listen for follow-up)
+          - "<command>" if user spoke wake word + command in one phrase
+        """
+        if not self.voice_enabled or self.is_listening_manual or self.is_speaking:
+            return None
+
+        if not self.mic_lock.acquire(blocking=False):
+            return None
+
+        try:
+            pcm_bytes = self._capture_phrase_pcm(
+                timeout=timeout,
+                phrase_time_limit=4.5,
+                silence_duration=0.55,
+                allow_manual_stop=False,
+                abort_on_manual_request=True,
+            )
+        except Exception:
+            return None
+        finally:
+            self.mic_lock.release()
+
+        if not pcm_bytes or self.is_listening_manual:
+            return None
+
+        try:
+            text = self.transcribe_pcm(
+                pcm_bytes,
+                initial_prompt=f"{self.wake_word}, Hey Sesame, dance, walk, wave, hello.",
+            )
+            if not text:
+                return None
+
+            remainder = self._extract_wake_remainder(text)
+            if remainder is not None:
+                print(f"[OK] Wake word detected: '{text}'")
+                return remainder
+        except Exception:
+            return None
+
+        return None
 
     def listen_for_wake_word(self, timeout: int = 10) -> bool:
-        """Listen continuously for the wake word"""
-        if not self.voice_enabled:
-            return False
+        """Listen for the wake word (boolean helper for interactive CLI)."""
+        return self.listen_for_wake_phrase(timeout=float(timeout)) is not None
 
-        try:
-            with sr.Microphone() as source:
-                self.recognizer.adjust_for_ambient_noise(source, duration=0.3)
-                audio = self.recognizer.listen(
-                    source, timeout=timeout, phrase_time_limit=3
-                )
+    @staticmethod
+    def _clean_tts_text(text: str) -> str:
+        """Strip bracketed UI face annotations before speaking."""
+        if not text:
+            return ""
+        cleaned = re.sub(r"\s*\[[^\]]*face\]\s*$", "", text, flags=re.IGNORECASE)
+        return cleaned.strip()
 
-                text = self.recognizer.recognize_google(audio)
-                detected_text = text.lower()
-
-                if self.wake_word in detected_text:
-                    print(f"[OK] Wake word detected: '{text}'")
-                    return True
-
-        except (sr.WaitTimeoutError, sr.UnknownValueError, sr.RequestError, Exception):
-            return False
-
-        return False
+    @staticmethod
+    def _contains_arabic_urdu_script(text: str) -> bool:
+        return bool(re.search(r"[\u0600-\u06FF]", text))
 
     def speak(
         self,
@@ -341,7 +869,7 @@ class VoiceInterface:
         face: Optional[str] = None,
         robot_controller=None,
     ):
-        """Speak text using TTS with optional talking face animation"""
+        """Speak text using TTS with synchronized talking face animation."""
         if not self.voice_enabled:
             return
 
@@ -355,160 +883,176 @@ class VoiceInterface:
             self._speak_sync(text, face, robot_controller)
 
     def _speak_sync(self, text: str, face: Optional[str] = None, robot_controller=None):
-        """Synchronous speech helper with optional talking animation"""
+        """Synchronous speech helper with smooth robot mouth animation."""
+        clean_text = self._clean_tts_text(text)
+        if not clean_text:
+            return
+
         try:
             with self.tts_lock:
+                self.is_speaking = True
+                engine = (self.tts_engine_type or "piper").lower()
+
+                # Route Arabic/Urdu script to Gemini TTS when API key is available
+                if self._contains_arabic_urdu_script(clean_text):
+                    if self.gemini_api_key:
+                        engine = "gemini"
+                    elif not re.search(r"[A-Za-z0-9]", clean_text):
+                        print(
+                            "[INFO] Non-Latin script response without Gemini TTS key; skipping English phoneme TTS."
+                        )
+                        if face and robot_controller:
+                            robot_controller.send_command("idle", face)
+                        return
+
+                if engine == "piper" and PIPER_AVAILABLE:
+                    self._speak_piper(clean_text, face=face, robot_controller=robot_controller)
+                    return
+
+                # Fallback animation loop for pyttsx3 / Gemini TTS (time-based, never opens mic!)
                 animation_thread = None
                 stop_animation = threading.Event()
 
                 if face and robot_controller:
                     robot_controller.send_command("idle", face)
-                    time.sleep(0.2)
-
                     animation_thread = threading.Thread(
-                        target=self._animate_talking_face,
+                        target=self._animate_time_based,
                         args=(face, robot_controller, stop_animation),
                         daemon=True,
                     )
                     animation_thread.start()
-                    time.sleep(0.1)
 
-                if self.tts_engine_type == "gemini":
-                    self._speak_gemini(text)
-                else:
-                    self._speak_pyttsx3(text)
-
-                if animation_thread:
-                    stop_animation.set()
-                    animation_thread.join(timeout=1)
-                    if robot_controller:
-                        robot_controller.send_command("idle", face)
+                try:
+                    if engine == "gemini":
+                        self._speak_gemini(clean_text)
+                    else:
+                        self._speak_pyttsx3(clean_text)
+                finally:
+                    if animation_thread:
+                        stop_animation.set()
+                        animation_thread.join(timeout=1.0)
+                        if robot_controller:
+                            robot_controller.send_command("idle", face)
 
         except Exception as e:
             print(f"[ERROR] TTS error: {e}")
+        finally:
+            self.is_speaking = False
 
-    def _animate_talking_face(
-        self, face: str, robot_controller, stop_event: threading.Event
-    ):
-        """Animate talking face using audio level detection"""
-        if AUDIO_MONITORING_AVAILABLE:
-            self._animate_with_audio_monitoring(face, robot_controller, stop_event)
-        else:
-            self._animate_time_based(face, robot_controller, stop_event)
+    @staticmethod
+    def _init_pygame_mixer(sample_rate: int):
+        import pygame
 
-    def _animate_with_audio_monitoring(
-        self, face: str, robot_controller, stop_event: threading.Event
+        current = pygame.mixer.get_init()
+        if current and current[0] != sample_rate:
+            pygame.mixer.quit()
+            current = None
+        if not current:
+            pygame.mixer.init(frequency=sample_rate, size=-16, channels=1, buffer=1024)
+        return pygame
+
+    def _speak_piper(
+        self,
+        text: str,
+        face: Optional[str] = None,
+        robot_controller=None,
     ):
-        """Animate mouth based on actual audio output levels"""
+        """Synthesize natural local speech via Piper ONNX and animate mouth from audio envelope."""
         try:
-            p = pyaudio.PyAudio()
+            voice = self._ensure_piper_voice()
+            wav_buf = io.BytesIO()
+            with wave.open(wav_buf, "wb") as wf:
+                voice.synthesize_wav(text, wf)
 
-            CHUNK = 1024
-            FORMAT = pyaudio.paInt16
-            CHANNELS = 1
-            RATE = 16000
-            THRESHOLD = 500
-            SMOOTHING = 0.3
+            wav_bytes = wav_buf.getvalue()
+            with wave.open(io.BytesIO(wav_bytes), "rb") as rf:
+                sample_rate = rf.getframerate()
+                pcm_frames = rf.readframes(rf.getnframes())
 
-            try:
-                stream = p.open(
-                    format=FORMAT,
-                    channels=CHANNELS,
-                    rate=RATE,
-                    input=True,
-                    frames_per_buffer=CHUNK,
-                )
-            except:
-                p.terminate()
-                self._animate_time_based(face, robot_controller, stop_event)
-                return
+            samples = np.frombuffer(pcm_frames, dtype=np.int16).astype(np.float32)
+            pygame = self._init_pygame_mixer(sample_rate)
 
+            if face and robot_controller:
+                robot_controller.send_command("idle", face)
+
+            sound = pygame.mixer.Sound(file=io.BytesIO(wav_bytes))
+            channel = sound.play()
+
+            play_start = time.monotonic()
             mouth_open = False
-            last_update = 0
-            update_interval = 0.05
-            smoothed_level = 0
+            last_robot_tx = 0.0
+            window_samples = max(1, int(sample_rate * 0.08))
 
-            while not stop_event.is_set():
-                try:
-                    data = stream.read(CHUNK, exception_on_overflow=False)
-                    audio_data = np.frombuffer(data, dtype=np.int16).astype(np.float64)
+            while channel is not None and channel.get_busy():
+                if face and robot_controller and samples.size > 0:
+                    now = time.monotonic()
+                    if (now - last_robot_tx) >= 0.18:
+                        idx = int((now - play_start) * sample_rate)
+                        if idx < samples.size:
+                            window = samples[idx : idx + window_samples]
+                            rms = float(np.sqrt(np.mean(window * window))) if window.size else 0.0
+                            should_open = rms > 900.0
+                            if should_open != mouth_open:
+                                mouth_open = should_open
+                                last_robot_tx = now
+                                target_face = f"talk_{face}" if mouth_open else face
+                                robot_controller.send_command("idle", target_face)
+                time.sleep(0.03)
 
-                    rms = np.sqrt(np.mean(audio_data**2)) if len(audio_data) > 0 else 0
-                    smoothed_level = (SMOOTHING * smoothed_level) + (
-                        (1 - SMOOTHING) * rms
-                    )
-
-                    current_time = time.time()
-                    should_open = smoothed_level > THRESHOLD
-
-                    if (
-                        should_open != mouth_open
-                        and (current_time - last_update) >= update_interval
-                    ):
-                        mouth_open = should_open
-                        last_update = current_time
-
-                        if mouth_open:
-                            robot_controller.send_command("idle", f"talk_{face}")
-                        else:
-                            robot_controller.send_command("idle", face)
-
-                    time.sleep(0.01)
-
-                except Exception:
-                    time.sleep(0.05)
-
-            stream.stop_stream()
-            stream.close()
-            p.terminate()
+            if face and robot_controller and mouth_open:
+                robot_controller.send_command("idle", face)
 
         except Exception as e:
-            print(f"[WARNING] Audio monitoring error: {e}, falling back to time-based")
-            self._animate_time_based(face, robot_controller, stop_event)
+            print(f"[WARNING] Piper TTS error ({e}), falling back to pyttsx3")
+            self._speak_pyttsx3(text)
 
     def _animate_time_based(
         self, face: str, robot_controller, stop_event: threading.Event
     ):
-        """Fallback: Animate mouth using time-based intervals"""
+        """Animate robot mouth gently without opening the microphone."""
         try:
-            syllable_duration = 0.15
-
+            syllable_duration = 0.20
             while not stop_event.is_set():
                 robot_controller.send_command("idle", f"talk_{face}")
-                time.sleep(syllable_duration)
-
-                if stop_event.is_set():
+                if stop_event.wait(syllable_duration):
                     break
-
                 robot_controller.send_command("idle", face)
-                time.sleep(syllable_duration)
-
+                if stop_event.wait(syllable_duration):
+                    break
         except Exception as e:
             print(f"[WARNING] Animation error: {e}")
 
     def _speak_pyttsx3(self, text: str):
-        """Speak using pyttsx3 engine"""
-        engine = pyttsx3.init()
-        engine.setProperty("rate", 200)
-        engine.setProperty("volume", 0.9)
+        """Speak using pyttsx3 engine with COM thread initialization for Windows."""
+        com_initialized = False
+        if pythoncom is not None:
+            try:
+                pythoncom.CoInitialize()
+                com_initialized = True
+            except Exception:
+                pass
+        try:
+            engine = pyttsx3.init()
+            engine.setProperty("rate", 200)
+            engine.setProperty("volume", 0.9)
 
-        voices = engine.getProperty("voices")
-        if len(voices) > 1:
-            engine.setProperty("voice", voices[1].id)
+            voices = engine.getProperty("voices")
+            if voices and len(voices) > 1:
+                engine.setProperty("voice", voices[1].id)
 
-        engine.say(text)
-        engine.runAndWait()
-        engine.stop()
+            engine.say(text)
+            engine.runAndWait()
+            engine.stop()
+        finally:
+            if com_initialized and pythoncom is not None:
+                try:
+                    pythoncom.CoUninitialize()
+                except Exception:
+                    pass
 
     def _speak_gemini(self, text: str):
-        """Speak using Gemini TTS API"""
+        """Speak using Gemini TTS API."""
         try:
-            import pygame
-            import wave
-            import tempfile
-            from google import genai
-            from google.genai import types
-
             client = genai.Client(api_key=self.gemini_api_key)
 
             response = client.models.generate_content(
@@ -529,44 +1073,33 @@ class VoiceInterface:
             if response.candidates and len(response.candidates) > 0:
                 audio_data = response.candidates[0].content.parts[0].inline_data.data
 
-                with tempfile.NamedTemporaryFile(
-                    suffix=".wav", delete=False
-                ) as temp_wav:
-                    temp_filename = temp_wav.name
-
-                with wave.open(temp_filename, "wb") as wf:
+                wav_buf = io.BytesIO()
+                with wave.open(wav_buf, "wb") as wf:
                     wf.setnchannels(1)
                     wf.setsampwidth(2)
                     wf.setframerate(24000)
                     wf.writeframes(audio_data)
 
-                pygame.mixer.init(frequency=24000, channels=1)
-                sound = pygame.mixer.Sound(temp_filename)
-                sound.play()
-
-                while pygame.mixer.get_busy():
-                    pygame.time.Clock().tick(10)
-
-                pygame.mixer.quit()
-
-                try:
-                    os.unlink(temp_filename)
-                except:
-                    pass
+                pygame = self._init_pygame_mixer(24000)
+                sound = pygame.mixer.Sound(file=io.BytesIO(wav_buf.getvalue()))
+                channel = sound.play()
+                while channel is not None and channel.get_busy():
+                    time.sleep(0.04)
             else:
                 print(
-                    "[WARNING] No audio data in Gemini response, falling back to pyttsx3"
+                    "[WARNING] No audio data in Gemini response, falling back to local TTS"
                 )
-                self._speak_pyttsx3(text)
+                if PIPER_AVAILABLE:
+                    self._speak_piper(text)
+                else:
+                    self._speak_pyttsx3(text)
 
-        except ImportError as e:
-            print(f"[WARNING] Missing dependency: {e}")
-            print("         Install with: pip install pygame")
-            print("         Falling back to pyttsx3")
-            self._speak_pyttsx3(text)
         except Exception as e:
-            print(f"[WARNING] Gemini TTS error: {e}, falling back to pyttsx3")
-            self._speak_pyttsx3(text)
+            print(f"[WARNING] Gemini TTS error: {e}, falling back to local TTS")
+            if PIPER_AVAILABLE:
+                self._speak_piper(text)
+            else:
+                self._speak_pyttsx3(text)
 
 
 class SesameRobotController:
@@ -782,7 +1315,7 @@ class SesameCompanionApp:
         robot_ip: str,
         gemini_api_key: str,
         voice_enabled: bool = True,
-        tts_engine: str = "pyttsx3",
+        tts_engine: str = "piper",
         wake_word: str = "hey sesame",
         wake_word_mode: bool = False,
     ):
@@ -913,13 +1446,14 @@ class SesameCompanionApp:
         print("  - Type or speak naturally to control the robot")
         print("  - Type 'voice' to toggle voice mode")
         print("  - Type 'wakeword' to toggle wake word mode")
-        print("  - Type 'tts' to switch TTS engine (pyttsx3/gemini)")
+        print("  - Type 'tts' to switch TTS engine (piper/pyttsx3/gemini)")
         print("  - Type 'status' to check robot status")
         print("  - Type 'help' to see available commands")
         print("  - Type 'quit' or 'exit' to exit")
         print()
 
         if self.voice_mode:
+            self.voice.warmup()
             if self.wake_word_mode:
                 print(
                     f"WAKE WORD MODE ENABLED - Say '{self.voice.wake_word}' to activate"
@@ -940,14 +1474,19 @@ class SesameCompanionApp:
 
                         if not user_input:
                             print(f"Listening for '{self.voice.wake_word}'...")
-                            if self.voice.listen_for_wake_word(timeout=30):
-                                print("Wake word detected! Listening for command...")
-                                user_input = self.voice.listen(timeout=10)
-                                if user_input:
+                            remainder = self.voice.listen_for_wake_phrase(timeout=30)
+                            if remainder is not None:
+                                if remainder:
+                                    user_input = remainder
                                     print(f"You said: {user_input}")
                                 else:
-                                    print("No command received")
-                                    continue
+                                    print("Wake word detected! Listening for command...")
+                                    user_input = self.voice.listen(timeout=10)
+                                    if user_input:
+                                        print(f"You said: {user_input}")
+                                    else:
+                                        print("No command received")
+                                        continue
                             else:
                                 continue
                     else:
@@ -996,12 +1535,13 @@ class SesameCompanionApp:
                     continue
 
                 if user_input.lower() == "tts":
-                    if self.voice.tts_engine_type == "pyttsx3":
-                        self.voice.tts_engine_type = "gemini"
-                        msg = "Switched to Gemini TTS"
-                    else:
-                        self.voice.tts_engine_type = "pyttsx3"
-                        msg = "Switched to pyttsx3 TTS"
+                    order = ["piper", "pyttsx3", "gemini"]
+                    curr = self.voice.tts_engine_type
+                    next_engine = order[(order.index(curr) + 1) % len(order)] if curr in order else "piper"
+                    if next_engine == "gemini" and not self.voice.gemini_api_key:
+                        next_engine = "piper"
+                    self.voice.tts_engine_type = next_engine
+                    msg = f"Switched to {next_engine} TTS"
                     print(msg)
                     self.voice.speak(msg)
                     print()
@@ -1064,7 +1604,7 @@ def main():
     robot_ip = os.getenv("SESAME_ROBOT_IP")
     gemini_api_key = os.getenv("GEMINI_API_KEY")
     voice_enabled = os.getenv("VOICE_ENABLED", "true").lower() == "true"
-    tts_engine = os.getenv("TTS_ENGINE", "pyttsx3")
+    tts_engine = os.getenv("TTS_ENGINE", "piper")
     wake_word = os.getenv("WAKE_WORD", "hey sesame")
     wake_word_mode = os.getenv("WAKE_WORD_MODE", "false").lower() == "true"
 
