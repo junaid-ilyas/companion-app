@@ -420,6 +420,10 @@ body::before {
   border-bottom-right-radius: 4px;
 }
 
+.message.user .message-text {
+  color: #fff;
+}
+
 .message.sesame .message-bubble {
   background: var(--bg-surface-2);
   border: 1px solid var(--border);

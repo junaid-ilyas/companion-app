@@ -397,12 +397,14 @@ function waitForApi() {
   });
 }
 
-async function sendMessage() {
+async function sendMessage({ preserveInput = false } = {}) {
   const input = document.getElementById('chat-input');
   const text = input.value.trim();
   if (!text) return;
 
-  input.value = '';
+  if (!preserveInput) {
+    input.value = '';
+  }
   addMessage('user', text);
   setTyping(true);
 
@@ -482,9 +484,8 @@ async function toggleListening() {
   try {
     const result = await window.pywebview.api.toggle_listening();
     if (result.text) {
-      addMessage('user', `[VOICE] ${result.text}`);
       document.getElementById('chat-input').value = result.text;
-      await sendMessage();
+      await sendMessage({ preserveInput: true });
     } else {
       addMessage('system', result.error || 'No speech detected');
     }
