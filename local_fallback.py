@@ -1,4 +1,5 @@
 import random
+import re
 
 SILLY_RESPONSES = {
     "greeting": [
@@ -39,9 +40,60 @@ INTELLIGENT_RESPONSES = {
     ]
 }
 
+COMMAND_KEYWORDS = {
+    "walk": ("walk", "move forward"),
+    "rest": ("rest", "take a rest", "relax"),
+    "swim": ("swim",),
+    "dance": ("dance",),
+    "wave": ("wave", "say hi", "say hello"),
+    "point": ("point",),
+    "stand": ("stand", "get up"),
+    "cute": ("cute pose", "cute"),
+    "pushup": ("push-up", "pushup", "push up"),
+    "freaky": ("freaky",),
+    "bow": ("bow",),
+    "worm": ("worm",),
+    "shake": ("shake",),
+    "shrug": ("shrug",),
+    "dead": ("dead", "play dead"),
+    "crab": ("crab walk", "crab"),
+    "idle": ("idle",),
+    "stop": ("stop",),
+}
+
+
+def detect_command(user_input: str) -> str | None:
+    """Detect an explicit robot action for offline/fallback operation."""
+    text = re.sub(r"\s+", " ", user_input.lower()).strip()
+    if not re.match(
+        r"^(?:please\s+)?(?:(?:can|could|would) you\s+)?(?:do(?:\s+a)?\s+|perform\s+|execute\s+|make (?:it|the robot)\s+)?"
+        r"(?:walk|move forward|rest|take a rest|relax|swim|dance|wave|say hi|say hello|point|stand|get up|cute pose|cute|"
+        r"push-up|pushup|push up|freaky|bow|worm|shake|shrug|dead|play dead|crab walk|crab|idle|stop)\b",
+        text,
+    ):
+        return None
+    matches = [
+        (command, phrase)
+        for command, phrases in COMMAND_KEYWORDS.items()
+        for phrase in phrases
+        if re.search(rf"\b{re.escape(phrase)}\b", text)
+    ]
+    if not matches:
+        return None
+    return max(matches, key=lambda match: len(match[1]))[0]
+
+
 def get_local_response(user_input: str, personality: str = "silly") -> dict:
+    command = detect_command(user_input)
     responses = INTELLIGENT_RESPONSES if personality == "intelligent" else SILLY_RESPONSES
     inp = user_input.lower()
+    if command:
+        return {
+            "response": f"Okay! I am performing {command} now.",
+            "face": None,
+            "command": command,
+            "reasoning": "The user directly requested a robot action.",
+        }
     if any(word in inp for word in ["hello", "hi", "hey", "greet"]):
         return random.choice(responses["greeting"])
     if any(word in inp for word in ["how are you", "how do you feel"]):

@@ -200,17 +200,16 @@ class Api:
             result = self._app.robot.send_command(command)
             if "error" in result:
                 return {"error": result["error"]}
-            else:
-                # Refresh status after command
-                try:
-                    status = self._app.robot.get_status()
-                    return {
-                        "success": True,
-                        "face": status.get("currentFace"),
-                        "command": status.get("currentCommand"),
-                    }
-                except Exception:
-                    return {"success": True}
+
+            status = self._app.robot.get_status()
+            if "error" in status:
+                return {"error": f"Command sent, but status verification failed: {status['error']}"}
+            return {
+                "success": True,
+                "face": status.get("currentFace"),
+                "command": status.get("currentCommand") or command,
+                "robot_response": result,
+            }
         except Exception as e:
             return {"error": str(e)}
 
@@ -228,7 +227,9 @@ class Api:
         ]
         try:
             for cmd, face in sequence:
-                self._app.robot.send_command(cmd, None)
+                result = self._app.robot.send_command(cmd, None)
+                if "error" in result:
+                    return {"error": f"{cmd}: {result['error']}"}
                 self._js(f"applyStatus({{connected: true, face: '{face}', command: '{cmd}'}})")
                 time.sleep(3)
             return {"success": True}

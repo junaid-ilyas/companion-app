@@ -439,12 +439,13 @@ async function sendCommand(cmd) {
     if (result.error) {
       addMessage('error', `Command failed: ${result.error}`);
     } else {
-      addMessage('success', `${cmd} executed`);
+      const confirmedCommand = result.command || cmd;
+      addMessage('success', `${confirmedCommand} accepted by robot`);
       if (result.face) {
         RobotFace.setFace(result.face);
         document.getElementById('metric-face').textContent = result.face;
       }
-      document.getElementById('metric-command').textContent = cmd;
+      document.getElementById('metric-command').textContent = confirmedCommand;
     }
   } catch (err) {
     addMessage('error', 'Command error: ' + err);

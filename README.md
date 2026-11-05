@@ -90,6 +90,16 @@ Run directly in your terminal for testing or headless environments:
 python sesame_companion.py
 ```
 
+### Hardware-Free Command Tests
+
+The command reliability tests use fake AI and robot objects, so they do not require the physical robot or a network connection:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+These tests cover fallback command detection, AI command recovery, command aliases, unsupported commands, sidebar success responses, status verification failures, microphone transcription flow, and microphone timeout handling. Microphone tests use fakes, so they validate the application path without accessing a physical microphone.
+
 ---
 
 ## Features

@@ -17,7 +17,7 @@ import speech_recognition as sr
 import pyttsx3
 import numpy as np
 import concurrent.futures
-from local_fallback import get_local_response
+from local_fallback import detect_command, get_local_response
 
 
 
@@ -87,6 +87,37 @@ ACTION_FACES = [
     "dead",
     "crab",
 ]
+
+COMMAND_ALIASES = {
+    "push-up": "pushup",
+    "push up": "pushup",
+    "crab walk": "crab",
+}
+
+
+def normalize_interpretation(value: Any) -> Dict[str, Any]:
+    """Normalize AI or fallback output before it reaches robot control."""
+    interpretation = dict(value) if isinstance(value, dict) else {}
+    command = interpretation.get("command")
+    if isinstance(command, str):
+        command = COMMAND_ALIASES.get(command.strip().lower(), command.strip().lower())
+    else:
+        command = None
+
+    face = interpretation.get("face")
+    if isinstance(face, str):
+        face = face.strip().lower()
+        if face not in AVAILABLE_FACES:
+            face = None
+    else:
+        face = None
+
+    interpretation["command"] = command
+    interpretation["face"] = face
+    interpretation.setdefault("response", "")
+    interpretation.setdefault("reasoning", "")
+    return interpretation
+
 
 SYSTEM_PROMPT = f"""1. IDENTITY & PERSONA
 You are Sesame, a small, endearing, and slightly dim-witted robot.
@@ -553,6 +584,10 @@ class SesameRobotController:
     def send_command(self, command: str, face: Optional[str] = None) -> Dict[str, Any]:
         """Send a command to the robot"""
         try:
+            command = COMMAND_ALIASES.get(command.strip().lower(), command.strip().lower())
+            if command not in AVAILABLE_COMMANDS:
+                return {"error": f"Unsupported robot command: {command}"}
+
             if command == "idle" and face:
                 payload = {"face": face}
             else:
@@ -584,7 +619,12 @@ class SesameRobotController:
                     return {"error": f"{response.status_code} - {response.text}"}
 
             response.raise_for_status()
-            return response.json()
+            result = response.json()
+            if not isinstance(result, dict):
+                return {"error": "Robot returned an invalid response"}
+            if result.get("status") in {"error", "failed"} or result.get("success") is False:
+                return {"error": result.get("error", f"Robot rejected command: {command}")}
+            return result
         except requests.exceptions.RequestException as e:
             return {"error": str(e)}
 
@@ -779,7 +819,13 @@ class SesameCompanionApp:
 
     def process_input(self, user_input: str) -> tuple:
         """Process user input through AI and control robot"""
-        interpretation = self.ai.interpret_command(user_input)
+        interpretation = normalize_interpretation(self.ai.interpret_command(user_input))
+        detected_command = detect_command(user_input)
+        if not interpretation.get("command") and detected_command:
+            interpretation["command"] = detected_command
+            interpretation["face"] = None
+            if not interpretation.get("response"):
+                interpretation["response"] = f"Okay! I am performing {detected_command} now."
 
         # Conversational response (face only, no command)
         if "response" in interpretation and not interpretation.get("command"):
