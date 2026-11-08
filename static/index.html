@@ -3,128 +3,159 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Sesame Robot Companion</title>
+  <title>Sesame Companion</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
 <div id="app">
-  <!-- ═══════════ Header Bar ═══════════ -->
-  <header class="header glass-panel">
-    <div class="header-left">
-      <div class="app-logo">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3" y="11" width="18" height="10" rx="2"></rect>
-          <circle cx="12" cy="5" r="2"></circle>
-          <path d="M12 7v4"></path>
-          <line x1="8" y1="16" x2="8.01" y2="16"></line>
-          <line x1="16" y1="16" x2="16.01" y2="16"></line>
-        </svg>
-      </div>
-      <span class="app-title">SESAME COMPANION</span>
-    </div>
-    <div class="header-right">
-      <span class="robot-status-text" id="robot-status-text">Status: Initializing...</span>
-
-      <div class="status-badge" id="ai-status-badge">
-        <span class="status-dot checking" id="ai-dot"></span>
-        <span class="status-text checking" id="ai-status-text">AI: checking...</span>
-      </div>
-
-      <div class="status-badge" id="connection-badge">
+  <!-- ═══════════ Left Panel: Living Companion & Tactile Tricks ═══════════ -->
+  <aside class="buddy-panel">
+    <div class="buddy-topbar">
+      <button class="brand-status" onclick="refreshStatus()" title="Click to refresh robot connection">
         <span class="status-dot offline" id="conn-dot"></span>
-        <span class="status-text offline" id="conn-status-text">Offline</span>
+        <span class="brand-name">Sesame</span>
+        <span class="conn-pill-label" id="robot-status-text">Offline</span>
+      </button>
+
+      <div class="persona-seg" role="tablist" aria-label="Companion Mode">
+        <button
+          class="persona-btn active"
+          id="persona-silly-btn"
+          onclick="selectPersona('silly')"
+          type="button"
+        >
+          Goofy
+        </button>
+        <button
+          class="persona-btn"
+          id="persona-intelligent-btn"
+          onclick="selectPersona('intelligent')"
+          type="button"
+        >
+          Intelligent
+        </button>
       </div>
     </div>
-  </header>
 
-  <!-- ═══════════ Main Content ═══════════ -->
-  <div class="main-content">
+    <!-- Expressive OLED Companion Screen -->
+    <div class="buddy-screen" id="buddy-screen">
+      <svg id="robot-face-svg" viewBox="0 0 320 200" xmlns="http://www.w3.org/2000/svg" aria-label="Sesame animated face"></svg>
+      <div class="mood-caption" id="mood-caption">Feeling cheerful &amp; curious</div>
+    </div>
 
-    <!-- ── Left Sidebar: Quick Actions ── -->
-    <aside class="sidebar-left glass-panel">
-      <div class="section-label">Movements</div>
-      <button class="action-btn movement" onclick="sendCommand('walk')">
-        Walk
-      </button>
-      <button class="action-btn movement" onclick="sendCommand('dance')">
-        Dance
-      </button>
-      <button class="action-btn movement" onclick="sendCommand('crab')">
-        Crab Walk
-      </button>
-
-      <div class="section-label">Gestures</div>
-      <button class="action-btn gesture" onclick="sendCommand('wave')">
-        Wave
-      </button>
-      <button class="action-btn gesture" onclick="sendCommand('bow')">
-        Bow
-      </button>
-      <button class="action-btn gesture" onclick="sendCommand('pushup')">
-        Pushup
-      </button>
-      <button class="action-btn gesture" onclick="sendCommand('swim')">
-        Swim
-      </button>
-      <button class="action-btn gesture" onclick="sendCommand('cute')">
-        Cute 
-      </button>
-
-      <div class="section-label">System</div>
-      <button class="action-btn system-demo" onclick="runDemo()">
-        Demo Mode
-      </button>
-      <button class="action-btn" onclick="refreshStatus()">
-        Refresh
-      </button>
-      <button class="action-btn system-stop" onclick="sendCommand('stop')">
-        Stop Action
-      </button>
-    </aside>
-
-    <!-- ── Center: Chat Area ── -->
-    <main class="chat-panel glass-panel">
-      <div class="chat-header">
-        <div class="chat-title">
-          <span class="chat-title-mark">●</span>
-          <span>Conversation</span>
-          <span class="personality-chip" id="personality-chip">Silly · playful</span>
-        </div>
+    <!-- Tactile Trick Buttons -->
+    <div class="tricks-section">
+      <div class="tricks-heading">
+        <span>Tap a trick to see Sesame move</span>
       </div>
 
-      <div class="messages-container" id="messages-container">
-        <div class="welcome-container" id="welcome-screen">
-          <div class="welcome-kicker">Sesame / desk companion</div>
-          <div class="welcome-icon">
-            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#ff8a65" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="3" y="11" width="18" height="10" rx="2"></rect>
-              <circle cx="12" cy="5" r="2"></circle>
-              <path d="M12 7v4"></path>
-              <line x1="8" y1="16" x2="8.01" y2="16"></line>
-              <line x1="16" y1="16" x2="16.01" y2="16"></line>
-            </svg>
-          </div>
-          <div class="welcome-title">Your tiny companion is awake.</div>
-          <div class="welcome-subtitle">
-            Ask a question, give Sesame a command, or invite a little attitude.
-          </div>
-          <div class="prompt-grid" aria-label="Suggested prompts">
-            <button class="prompt-chip" data-prompt="Tell me a joke.">Tell me a joke</button>
-            <button class="prompt-chip" data-prompt="Roast me.">Roast me</button>
-            <button class="prompt-chip" data-prompt="Do a little dance for us!">Do a dance</button>
-            <button class="prompt-chip" data-prompt="How are you feeling today?">Check in</button>
-          </div>
-        </div>
-        <div class="typing-indicator" id="typing-indicator">
-          <span>Sesame is thinking</span>
-          <div class="typing-dots">
-            <span></span><span></span><span></span>
-          </div>
-        </div>
+      <div class="trick-grid">
+        <button class="toy-btn" data-cmd="wave" onclick="triggerTrick(this, 'wave', 'happy', 'Waving hello!')">
+          <span>Wave Hi</span>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 11V6a2 2 0 0 0-4 0v5"/><path d="M14 10V4a2 2 0 0 0-4 0v6"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8a6 6 0 0 0 12 0v-3"/></svg>
+        </button>
+
+        <button class="toy-btn" data-cmd="dance" onclick="triggerTrick(this, 'dance', 'excited', 'Doing a happy dance!')">
+          <span>Dance</span>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+        </button>
+
+        <button class="toy-btn" data-cmd="walk" onclick="triggerTrick(this, 'walk', 'happy', 'Going for a walk!')">
+          <span>Walk</span>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+        </button>
+
+        <button class="toy-btn" data-cmd="crab" onclick="triggerTrick(this, 'crab', 'excited', 'Sideways crab walk!')">
+          <span>Crab Walk</span>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 8 4 4-4 4"/><path d="M2 12h20"/><path d="m6 8-4 4 4 4"/></svg>
+        </button>
+
+        <button class="toy-btn" data-cmd="bow" onclick="triggerTrick(this, 'bow', 'love', 'Taking a polite bow!')">
+          <span>Take a Bow</span>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
+        </button>
+
+        <button class="toy-btn" data-cmd="cute" onclick="triggerTrick(this, 'cute', 'love', 'Acting extra adorable!')">
+          <span>Act Cute</span>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78L12 21.23l8.84-8.84a5.5 5.5 0 0 0 0-7.78z"/></svg>
+        </button>
+
+        <button class="toy-btn" data-cmd="pushup" onclick="triggerTrick(this, 'pushup', 'excited', 'Desk workout pushups!')">
+          <span>Pushups</span>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 15 7-7 7 7"/><line x1="4" y1="19" x2="20" y2="19"/></svg>
+        </button>
+
+        <button class="toy-btn" data-cmd="swim" onclick="triggerTrick(this, 'swim', 'happy', 'Floor swimming!')">
+          <span>Swim</span>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12c2-2.5 4-2.5 6 0s4 2.5 6 0 4-2.5 6 0"/><path d="M2 17c2-2.5 4-2.5 6 0s4 2.5 6 0 4-2.5 6 0"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Primary Stage Actions -->
+    <div class="stage-cta-row">
+      <button class="demo-btn" id="demo-btn" onclick="runDemo()" type="button">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+        <span>Full Demo</span>
+      </button>
+      <button class="rest-btn" onclick="triggerRest()" type="button">
+        Rest
+      </button>
+    </div>
+  </aside>
+
+  <!-- ═══════════ Right Panel: Warm Companion Conversation ═══════════ -->
+  <main class="chat-panel">
+    <header class="chat-topbar">
+      <div>
+        <h1 class="chat-heading" id="chat-heading">Hang out with Sesame</h1>
+        <p class="chat-subheading" id="personality-chip">Playful AI pet companion — press Voice and speak close to the mic</p>
       </div>
 
-      <div class="chat-input-area">
+      <div class="chat-topbar-actions">
+        <button class="stretch-pill" onclick="triggerStretchBreak()" type="button" title="Start an active desk movement break with Sesame">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 15"/></svg>
+          <span>Stretch Break</span>
+        </button>
+
+        <button class="settings-trigger" onclick="toggleSettingsModal(true)" type="button" title="Companion Settings">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.77 1.02 1.41 1.09H21a2 2 0 0 1 0 4h-.09c-.64.07-1.15.49-1.51 1z"></path>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Conversation Stream -->
+    <div class="messages-container" id="messages-container">
+      <div class="welcome-card" id="welcome-screen">
+        <div class="welcome-badge">Screen-Free AI Pet Companion</div>
+        <h2 class="welcome-title">Hi friend! Ready to hang out?</h2>
+        <p class="welcome-copy">
+          Tap any trick on the left to watch Sesame move, press <strong>Voice</strong> to talk out loud, or pick a conversation starter below.
+        </p>
+      </div>
+
+      <div class="typing-indicator" id="typing-indicator">
+        <span class="typing-label">Sesame is thinking</span>
+        <div class="typing-dots">
+          <span></span><span></span><span></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Quick Starters & Voice/Text Composer -->
+    <div class="composer-zone">
+      <div class="prompt-row" id="prompt-row" aria-label="Quick prompts">
+        <button class="prompt-chip" type="button" data-prompt="Hello Sesame! Wave hi to everyone!">Say hello</button>
+        <button class="prompt-chip" type="button" data-prompt="Tell me a short funny joke!">Tell a joke</button>
+        <button class="prompt-chip" type="button" data-prompt="Show us your happy dance!">Happy dance</button>
+        <button class="prompt-chip" type="button" data-prompt="Roast me playfully in two sentences.">Playful roast</button>
+      </div>
+
+      <div class="composer-bar">
         <input
           type="text"
           class="chat-input"
@@ -133,114 +164,146 @@
           autocomplete="off"
           spellcheck="false"
         />
-        <button class="input-btn mic-btn" id="mic-btn" onclick="toggleListening()" title="Voice Input">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
-            <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
-            <line x1="12" y1="19" x2="12" y2="23"></line>
-            <line x1="8" y1="23" x2="16" y2="23"></line>
+
+        <button class="voice-btn" id="mic-btn" onclick="toggleListening()" type="button" title="Push to Talk (click again when finished)">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="2" width="6" height="12" rx="3"></rect>
+            <path d="M5 10a7 7 0 0 0 14 0"></path>
+            <line x1="12" y1="19" x2="12" y2="22"></line>
           </svg>
+          <span id="mic-btn-label">Voice</span>
         </button>
-        <button class="input-btn send-btn" id="send-btn" onclick="sendMessage()" title="Send Message">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="22" y1="2" x2="11" y2="13"></line>
-            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-          </svg>
+
+        <button class="send-btn" id="send-btn" onclick="sendMessage()" type="button" title="Send message">
+          <span>Send</span>
         </button>
       </div>
-    </main>
+    </div>
+  </main>
+</div>
 
-    <!-- ── Right Sidebar: Face & Settings ── -->
-    <aside class="sidebar-right">
+<!-- ═══════════ Discreet Operator Settings Modal ═══════════ -->
+<div class="modal-backdrop" id="settings-modal" onclick="if (event.target === this) toggleSettingsModal(false)">
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
+    <div class="modal-header">
+      <h3 id="settings-modal-title">Companion Settings</h3>
+      <button class="modal-close" onclick="toggleSettingsModal(false)" type="button" aria-label="Close settings">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
 
-      <!-- Robot Face -->
-      <div class="face-panel glass-panel">
-        <div class="face-section-label">
-          <span>Face Display</span>
+    <div class="modal-section">
+      <div class="modal-section-title">Voice &amp; Listening</div>
+
+      <div class="setting-row">
+        <div>
+          <div class="setting-name">Voice Replies</div>
+          <div class="setting-hint">Speak Sesame's responses out loud</div>
         </div>
-        <div class="robot-face-canvas">
-          <svg id="robot-face-svg" viewBox="0 0 220 220" xmlns="http://www.w3.org/2000/svg">
-            <!-- Face elements drawn by JS -->
-          </svg>
-        </div>
+        <label class="toggle-switch">
+          <input type="checkbox" id="voice-toggle" checked onchange="updateSetting('voice', this.checked)">
+          <span class="toggle-slider"></span>
+        </label>
       </div>
 
-      <!-- Settings -->
-      <div class="settings-panel glass-panel">
-        <div class="settings-section-label">
-          <span>Control Panel</span>
+      <div class="setting-row">
+        <div>
+          <div class="setting-name">"Hey Sesame" Wake Word</div>
+          <div class="setting-hint">Keep off in loud halls to use Push-to-Talk</div>
         </div>
-
-        <!-- Voice Control -->
-        <div class="setting-group">
-          <div class="setting-group-title">Voice Control</div>
-          <div class="toggle-row">
-            <span class="toggle-label">Voice Mode</span>
-            <label class="toggle-switch">
-              <input type="checkbox" id="voice-toggle" checked onchange="updateSetting('voice', this.checked)">
-              <span class="toggle-slider"></span>
-            </label>
-          </div>
-          <div class="toggle-row">
-            <span class="toggle-label">Wake Word</span>
-            <label class="toggle-switch">
-              <input type="checkbox" id="wake-toggle" onchange="updateSetting('wake_word', this.checked)">
-              <span class="toggle-slider"></span>
-            </label>
-          </div>
-        </div>
-
-        <!-- TTS Engine -->
-        <div class="setting-group">
-          <div class="setting-group-title">TTS Engine</div>
-          <div class="radio-group">
-            <label class="radio-option">
-              <input type="radio" name="tts" value="piper" checked onchange="updateSetting('tts', 'piper')">
-              Piper (Local Neural)
-            </label>
-            <label class="radio-option">
-              <input type="radio" name="tts" value="pyttsx3" onchange="updateSetting('tts', 'pyttsx3')">
-              pyttsx3 (Local)
-            </label>
-            <label class="radio-option">
-              <input type="radio" name="tts" value="gemini" onchange="updateSetting('tts', 'gemini')">
-              Gemini (Cloud)
-            </label>
-          </div>
-        </div>
-
-        <!-- Personality -->
-        <div class="setting-group">
-          <div class="setting-group-title">AI Personality</div>
-          <div class="radio-group personality-radios">
-            <label class="radio-option">
-              <input type="radio" name="personality" value="silly" checked onchange="updateSetting('personality', 'silly')">
-              Silly
-            </label>
-            <label class="radio-option">
-              <input type="radio" name="personality" value="intelligent" onchange="updateSetting('personality', 'intelligent')">
-              Intelligent
-            </label>
-          </div>
-        </div>
-
-        <!-- Robot Metrics -->
-        <div class="setting-group">
-          <div class="setting-group-title">Robot Metrics</div>
-          <div class="metrics-grid">
-            <span class="metric-label">IP Address</span>
-            <span class="metric-value white" id="metric-ip">—</span>
-
-            <span class="metric-label">Expression</span>
-            <span class="metric-value cyan" id="metric-face">default</span>
-
-            <span class="metric-label">Command</span>
-            <span class="metric-value orange" id="metric-command">none</span>
-          </div>
-        </div>
+        <label class="toggle-switch">
+          <input type="checkbox" id="wake-toggle" onchange="updateSetting('wake_word', this.checked)">
+          <span class="toggle-slider"></span>
+        </label>
       </div>
 
-    </aside>
+      <div class="setting-row">
+        <div>
+          <div class="setting-name">Microphone Input</div>
+          <div class="setting-hint">Laptop mic or Hands-Free headset</div>
+        </div>
+        <select class="mic-select" id="mic-device-select" onchange="updateSetting('mic_device', this.value, { silentChat: true })">
+          <option value="">System Default Mic</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="modal-section">
+      <div class="modal-section-title">AI Brain Mode</div>
+      <div class="radio-stack">
+        <label class="radio-card">
+          <input type="radio" name="ai_mode" value="auto" checked onchange="updateSetting('ai_mode', 'auto')">
+          <span>Auto (Cloud + Local Ollama Failover)</span>
+        </label>
+        <label class="radio-card">
+          <input type="radio" name="ai_mode" value="ollama" onchange="updateSetting('ai_mode', 'ollama')">
+          <span>Offline Local LLM (Ollama — No Wi-Fi)</span>
+        </label>
+        <label class="radio-card">
+          <input type="radio" name="ai_mode" value="groq" onchange="updateSetting('ai_mode', 'groq')">
+          <span>Groq Cloud Only</span>
+        </label>
+      </div>
+    </div>
+
+    <div class="modal-section">
+      <div class="modal-section-title">Voice Synthesis &amp; Character</div>
+      <div class="voice-style-pills" role="radiogroup" aria-label="Piper Voice Character">
+        <button type="button" class="style-pill active" id="vstyle-cute" onclick="selectVoiceStyle('cute')">Cute Kid</button>
+        <button type="button" class="style-pill" id="vstyle-silly" onclick="selectVoiceStyle('silly')">Extra Silly</button>
+        <button type="button" class="style-pill" id="vstyle-natural" onclick="selectVoiceStyle('natural')">Natural</button>
+      </div>
+      <div class="radio-stack">
+        <label class="radio-card">
+          <input type="radio" name="tts" value="piper" checked onchange="updateSetting('tts', 'piper')">
+          <span>Piper Neural (Cute Buddy, Offline)</span>
+        </label>
+        <label class="radio-card">
+          <input type="radio" name="tts" value="pyttsx3" onchange="updateSetting('tts', 'pyttsx3')">
+          <span>System Voice (pyttsx3 Classic)</span>
+        </label>
+        <label class="radio-card">
+          <input type="radio" name="tts" value="gemini" onchange="updateSetting('tts', 'gemini')">
+          <span>Gemini Voice (Cloud)</span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Hidden radio sync for backward compatibility -->
+    <div style="display:none;">
+      <input type="radio" name="personality" value="silly" checked>
+      <input type="radio" name="personality" value="intelligent">
+    </div>
+
+    <div class="modal-section diagnostics-box">
+      <div class="diag-header">
+        <span class="modal-section-title" style="margin:0;">Connection Status</span>
+        <button class="diag-refresh-btn" onclick="refreshStatus()" type="button">Refresh</button>
+      </div>
+
+      <div class="diag-grid">
+        <span class="diag-key">Robot Link</span>
+        <span class="diag-val" id="conn-status-text">Offline</span>
+
+        <span class="diag-key">AI Engine</span>
+        <span class="diag-val">
+          <span class="status-dot checking" id="ai-dot" style="display:inline-block;vertical-align:middle;margin-right:5px;"></span>
+          <span id="ai-status-text">Checking...</span>
+        </span>
+
+        <span class="diag-key">Robot Wi-Fi IP</span>
+        <span class="diag-val diag-ip-row">
+          <input type="text" class="ip-inline-input" id="robot-ip-input" placeholder="192.168.x.x" spellcheck="false" autocomplete="off">
+          <button class="diag-refresh-btn" onclick="saveRobotIp()" type="button">Apply</button>
+          <span id="metric-ip" style="display:none;">—</span>
+        </span>
+
+        <span class="diag-key">Expression / Action</span>
+        <span class="diag-val"><span id="metric-face">default</span> · <span id="metric-command">none</span></span>
+      </div>
+
+      <div class="diag-log" id="operator-log">Initializing local voice &amp; AI...</div>
+    </div>
   </div>
 </div>
 

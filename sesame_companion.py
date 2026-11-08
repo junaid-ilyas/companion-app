@@ -36,9 +36,11 @@ except ImportError:
 
 try:
     from piper.voice import PiperVoice
+    from piper.config import SynthesisConfig
     PIPER_AVAILABLE = True
 except ImportError:
     PiperVoice = None
+    SynthesisConfig = None
     PIPER_AVAILABLE = False
 
 try:
@@ -119,7 +121,32 @@ COMMAND_ALIASES = {
     "push-up": "pushup",
     "push up": "pushup",
     "crab walk": "crab",
+    "stop": "rest",
 }
+
+
+EMOJI_PATTERN = re.compile(
+    "["
+    "\U0001F000-\U0001FFFF"
+    "\u2600-\u27BF"
+    "\u2300-\u23FF"
+    "\u2B50\u2B55\u2934\u2935"
+    "\u25AA\u25AB\u25FE\u25FD\u25FB\u25FC\u25B6\u25C0"
+    "\u3030\u303D\u3297\u3299"
+    "\uFE0E\uFE0F\u200D\u20E3"
+    "]+",
+    flags=re.UNICODE,
+)
+
+
+def strip_emojis(text: str) -> str:
+    """Remove all emoji, pictograph, and variation-selector characters from text."""
+    if not text:
+        return ""
+    cleaned = EMOJI_PATTERN.sub("", str(text))
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"\n\s*\n+", "\n", cleaned)
+    return cleaned.strip()
 
 
 def normalize_interpretation(value: Any) -> Dict[str, Any]:
@@ -141,7 +168,8 @@ def normalize_interpretation(value: Any) -> Dict[str, Any]:
 
     interpretation["command"] = command
     interpretation["face"] = face
-    interpretation.setdefault("response", "")
+    raw_response = interpretation.get("response", "")
+    interpretation["response"] = strip_emojis(raw_response) if isinstance(raw_response, str) else ""
     interpretation.setdefault("reasoning", "")
     return interpretation
 
@@ -238,7 +266,7 @@ Output (Self-aware variant):
 - Valid JSON only.
 """
 
-SHORT_SYSTEM_PROMPT = f"""You are Sesame, a small, dim-witted robot. Speak like a toddler (first person "I"). Keep responses under 15 words. Occasionally be sarcastic.
+SHORT_SYSTEM_PROMPT = f"""You are Sesame, a small, dim-witted robot. Speak like a toddler (first person "I"). Keep responses under 20 words. Occasionally be sarcastic.
 
 Output ONLY JSON:
 {{
@@ -286,20 +314,18 @@ MODELS_DIR = os.path.join(BASE_DIR, "models")
 WHISPER_MODELS_DIR = os.path.join(MODELS_DIR, "whisper")
 PIPER_MODELS_DIR = os.path.join(MODELS_DIR, "piper")
 
-WHISPER_DOMAIN_PROMPT = (
-    "Sesame robot companion. Hey Sesame. "
-    "walk, dance, crab walk, wave, bow, pushup, swim, cute, shake, shrug, worm, rest, stop."
-)
-
+# Phrases Whisper famously hallucinates from YouTube subtitle training data when fed background noise
 SILENCE_HALLUCINATIONS = {
-    "thank you",
-    "thank you.",
     "thanks for watching",
-    "thanks for watching.",
+    "thank you for watching",
+    "please subscribe",
+    "subscribe",
+    "subtitles by",
+    "amara org",
     "you",
-    "you.",
-    "bye",
-    "bye.",
+    "uh",
+    "um",
+    "hmm",
     "...",
     ".",
 }
@@ -310,6 +336,7 @@ class VoiceInterface:
 
     SAMPLE_RATE = 16000
     CHUNK_SIZE = 1024
+    DEFAULT_CLOSE_TALK_THRESHOLD = 4000.0
 
     def __init__(
         self,
@@ -322,19 +349,25 @@ class VoiceInterface:
         self.tts_engine_type = (tts_engine or "piper").strip().lower()
         self.gemini_api_key = gemini_api_key
         self.wake_word = (wake_word or "hey sesame").strip().lower()
+        self.voice_language = (os.getenv("VOICE_LANGUAGE", "en").strip().lower() or "en")
         self.microphone_device_index = self._get_microphone_device_index()
         self.last_listen_error: Optional[str] = None
 
+        self.close_talk_threshold = float(
+            os.getenv("MIC_ENERGY_THRESHOLD", str(int(self.DEFAULT_CLOSE_TALK_THRESHOLD)))
+        )
+
         self.recognizer = sr.Recognizer()
-        self.recognizer.energy_threshold = 300
-        self.recognizer.dynamic_energy_threshold = True
-        self.recognizer.pause_threshold = 0.7
+        self.recognizer.energy_threshold = int(self.close_talk_threshold)
+        self.recognizer.dynamic_energy_threshold = False
+        self.recognizer.pause_threshold = 0.6
 
         self.tts_lock = threading.Lock()
         self.mic_lock = threading.Lock()
         self._stop_listen_event = threading.Event()
         self.is_listening_manual = False
         self.is_speaking = False
+        self._mute_until = 0.0
 
         self._whisper_model = None
         self._whisper_lock = threading.Lock()
@@ -344,11 +377,15 @@ class VoiceInterface:
         self._piper_voice_loaded_name = None
         self._piper_lock = threading.Lock()
         self._piper_voice_name = (
-            os.getenv("PIPER_VOICE", "en_US-lessac-medium").strip()
-            or "en_US-lessac-medium"
+            os.getenv("PIPER_VOICE", "en_US-lessac-low").strip()
+            or "en_US-lessac-low"
+        )
+        self.voice_style = (
+            os.getenv("PIPER_VOICE_STYLE", "cute").strip().lower() or "cute"
         )
 
-        self._energy_threshold = float(os.getenv("MIC_ENERGY_THRESHOLD", "260"))
+        self._ambient_rms = 120.0
+        self._energy_threshold = self.close_talk_threshold
         self._ambient_calibrated = False
 
         if self.tts_engine_type == "gemini" and not self.gemini_api_key:
@@ -439,14 +476,14 @@ class VoiceInterface:
                     local_files_only=False,
                 )
 
-            # Warm up CTranslate2 & Silero VAD ONNX once so the first mic click has zero lag
+            # Warm up CTranslate2 once so the first mic click has zero lag
             dummy = np.zeros(3200, dtype=np.float32)
             list(
                 model.transcribe(
                     dummy,
                     beam_size=1,
                     temperature=0.0,
-                    vad_filter=True,
+                    vad_filter=False,
                     without_timestamps=True,
                 )[0]
             )
@@ -457,7 +494,7 @@ class VoiceInterface:
             return self._whisper_model
 
     def _ensure_piper_voice(self):
-        """Load local Piper neural ONNX voice once and keep it warm."""
+        """Load local Piper neural ONNX voice with non-spinning CPU session options."""
         if not PIPER_AVAILABLE:
             raise RuntimeError("piper-tts is not installed. Run: pip install piper-tts")
 
@@ -479,7 +516,37 @@ class VoiceInterface:
 
                 download_voice(self._piper_voice_name, Path(PIPER_MODELS_DIR))
 
-            voice = PiperVoice.load(onnx_path)
+            import onnxruntime
+            from pathlib import Path
+            from piper.voice import PiperConfig, ESPEAK_DATA_DIR
+
+            with open(f"{onnx_path}.json", "r", encoding="utf-8") as cfg_file:
+                config_dict = json.load(cfg_file)
+
+            sess_options = onnxruntime.SessionOptions()
+            sess_options.graph_optimization_level = (
+                onnxruntime.GraphOptimizationLevel.ORT_ENABLE_BASIC
+            )
+            sess_options.intra_op_num_threads = 2
+            sess_options.inter_op_num_threads = 1
+            sess_options.add_session_config_entry("session.intra_op.allow_spinning", "0")
+            sess_options.add_session_config_entry("session.inter_op.allow_spinning", "0")
+
+            opt_path = f"{onnx_path}.opt.onnx"
+            model_to_load = opt_path if os.path.exists(opt_path) else onnx_path
+            if not os.path.exists(opt_path):
+                sess_options.optimized_model_filepath = opt_path
+
+            voice = PiperVoice(
+                config=PiperConfig.from_dict(config_dict),
+                session=onnxruntime.InferenceSession(
+                    model_to_load,
+                    sess_options=sess_options,
+                    providers=["CPUExecutionProvider"],
+                ),
+                espeak_data_dir=Path(ESPEAK_DATA_DIR),
+                download_dir=Path(PIPER_MODELS_DIR),
+            )
             buf = io.BytesIO()
             with wave.open(buf, "wb") as wf:
                 voice.synthesize_wav("Hi.", wf)
@@ -489,8 +556,18 @@ class VoiceInterface:
             print(f"[OK] Local Piper TTS ready (voice={self._piper_voice_name})")
             return self._piper_voice
 
+    @staticmethod
+    def compute_exhibition_threshold(
+        ambient_rms: float, close_talk_floor: float = 4000.0
+    ) -> float:
+        """
+        Compute close-talk energy threshold that ignores exhibition crowd chatter.
+        Never drops below close_talk_floor (4000) and scales up uncapped in very loud halls.
+        """
+        return max(float(close_talk_floor), min(16000.0, ambient_rms * 2.4 + 600.0))
+
     def _calibrate_ambient_once(self, duration: float = 0.35):
-        """Measure ambient mic RMS once at startup so listen() has zero startup delay."""
+        """Measure ambient mic RMS once at startup and enforce close-talk threshold."""
         if self._ambient_calibrated or not AUDIO_MONITORING_AVAILABLE:
             return
         with self.mic_lock:
@@ -521,8 +598,9 @@ class VoiceInterface:
 
                 if rms_samples:
                     ambient = float(np.median(rms_samples))
-                    self._energy_threshold = max(
-                        170.0, min(850.0, ambient * 1.9 + 85.0)
+                    self._ambient_rms = ambient
+                    self._energy_threshold = self.compute_exhibition_threshold(
+                        ambient, self.close_talk_threshold
                     )
                 self._ambient_calibrated = True
             except Exception as exc:
@@ -540,8 +618,8 @@ class VoiceInterface:
                     except Exception:
                         pass
 
-    def warmup(self) -> Dict[str, Any]:
-        """Preload local STT + TTS models and calibrate microphone once on a background thread."""
+    def warmup(self, async_tts: bool = True) -> Dict[str, Any]:
+        """Preload local STT immediately (~1.5s) and warm up Piper TTS asynchronously."""
         info: Dict[str, Any] = {
             "stt_ready": False,
             "stt_model": self._whisper_model_name,
@@ -555,55 +633,153 @@ class VoiceInterface:
             print(f"[WARNING] Whisper warmup failed: {exc}")
             info["stt_error"] = str(exc)
 
-        if PIPER_AVAILABLE:
-            try:
-                self._ensure_piper_voice()
-                info["tts_ready"] = True
-            except Exception as exc:
-                print(f"[WARNING] Piper warmup failed: {exc}")
-                info["tts_error"] = str(exc)
-
         self._calibrate_ambient_once()
+
+        if PIPER_AVAILABLE:
+            if async_tts:
+                threading.Thread(
+                    target=self._safe_preload_piper, daemon=True
+                ).start()
+                info["tts_ready"] = True
+            else:
+                try:
+                    self._ensure_piper_voice()
+                    info["tts_ready"] = True
+                except Exception as exc:
+                    print(f"[WARNING] Piper warmup failed: {exc}")
+                    info["tts_error"] = str(exc)
+
         return info
+
+    def _safe_preload_piper(self):
+        try:
+            self._ensure_piper_voice()
+        except Exception as exc:
+            print(f"[WARNING] Background Piper warmup failed: {exc}")
+
+    def _open_mic_stream(self, pa):
+        """Open mono input stream at 16 kHz, falling back to native device rate (e.g. 8kHz/48kHz Bluetooth Hands-Free)."""
+        base_kwargs = {
+            "format": pyaudio.paInt16,
+            "channels": 1,
+            "input": True,
+        }
+        if self.microphone_device_index is not None:
+            base_kwargs["input_device_index"] = self.microphone_device_index
+
+        try:
+            stream = pa.open(
+                rate=self.SAMPLE_RATE,
+                frames_per_buffer=self.CHUNK_SIZE,
+                **base_kwargs,
+            )
+            return stream, self.SAMPLE_RATE, self.CHUNK_SIZE
+        except Exception:
+            if self.microphone_device_index is not None:
+                info = pa.get_device_info_by_index(self.microphone_device_index)
+            else:
+                info = pa.get_default_input_device_info()
+            native_rate = max(8000, int(round(float(info.get("defaultSampleRate", 44100)))))
+            native_chunk = max(256, int(round(self.CHUNK_SIZE * native_rate / float(self.SAMPLE_RATE))))
+            stream = pa.open(
+                rate=native_rate,
+                frames_per_buffer=native_chunk,
+                **base_kwargs,
+            )
+            return stream, native_rate, native_chunk
+
+    def _read_16k_chunk(self, stream, hw_rate: int, hw_chunk: int) -> tuple[bytes, float]:
+        """Read one mic chunk, resample to 16 kHz if needed, and compute DC-free AC RMS."""
+        raw = stream.read(hw_chunk, exception_on_overflow=False)
+        arr = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
+        if arr.size == 0:
+            return b"", 0.0
+
+        if hw_rate != self.SAMPLE_RATE:
+            out_len = max(1, int(round(arr.size * float(self.SAMPLE_RATE) / float(hw_rate))))
+            src_x = np.linspace(0.0, float(arr.size - 1), num=arr.size, dtype=np.float32)
+            dst_x = np.linspace(0.0, float(arr.size - 1), num=out_len, dtype=np.float32)
+            arr = np.interp(dst_x, src_x, arr).astype(np.float32)
+            raw = np.clip(arr, -32767.0, 32767.0).astype(np.int16).tobytes()
+
+        centered = arr - float(np.mean(arr))
+        rms = float(np.sqrt(np.mean(centered * centered)))
+        return raw, rms
+
+    @staticmethod
+    def list_input_devices() -> list[Dict[str, Any]]:
+        """Return clean Windows MME microphone/headset input devices for operator selection."""
+        if not AUDIO_MONITORING_AVAILABLE:
+            return []
+        devices = []
+        pa = None
+        try:
+            pa = pyaudio.PyAudio()
+            seen_names = set()
+            for idx in range(pa.get_device_count()):
+                info = pa.get_device_info_by_index(idx)
+                if int(info.get("maxInputChannels", 0)) <= 0:
+                    continue
+                if int(info.get("hostApi", 0)) != 0:
+                    continue
+                name = str(info.get("name", f"Input {idx}")).strip()
+                if "sound mapper" in name.lower() or name.lower() in seen_names:
+                    continue
+                seen_names.add(name.lower())
+                devices.append({"index": idx, "name": name})
+        except Exception as exc:
+            print(f"[WARNING] Could not enumerate mic devices: {exc}")
+        finally:
+            if pa is not None:
+                try:
+                    pa.terminate()
+                except Exception:
+                    pass
+        return devices
 
     def _capture_phrase_pcm(
         self,
-        timeout: float = 5.0,
+        timeout: float = 6.0,
         phrase_time_limit: float = 10.0,
-        silence_duration: float = 0.65,
+        silence_duration: float = 0.80,
         allow_manual_stop: bool = True,
         abort_on_manual_request: bool = False,
     ) -> Optional[bytes]:
-        """Capture 16kHz 16-bit mono PCM speech with a pre-roll buffer and adaptive silence cutoff."""
+        """Capture 16kHz 16-bit mono PCM speech with adaptive Push-to-Talk sensitivity."""
         if not AUDIO_MONITORING_AVAILABLE:
             raise RuntimeError("PyAudio is required for local microphone capture")
 
         pa = pyaudio.PyAudio()
         stream = None
         try:
-            open_kwargs = {
-                "format": pyaudio.paInt16,
-                "channels": 1,
-                "rate": self.SAMPLE_RATE,
-                "input": True,
-                "frames_per_buffer": self.CHUNK_SIZE,
-            }
-            if self.microphone_device_index is not None:
-                open_kwargs["input_device_index"] = self.microphone_device_index
-
-            stream = pa.open(**open_kwargs)
+            stream, hw_rate, hw_chunk = self._open_mic_stream(pa)
 
             chunk_sec = self.CHUNK_SIZE / float(self.SAMPLE_RATE)
-            pre_roll = collections.deque(maxlen=5)  # ~320ms pre-roll prevents clipping first syllable
+            pre_roll = collections.deque(maxlen=7)  # ~450ms pre-roll prevents clipping first word
+            manual_all_frames = []
+            max_seen_rms = 0.0
+            idle_rms_history = collections.deque(maxlen=15)
+
             frames = []
             speech_started = False
             onset_hits = 0
             silence_chunks = 0
-            max_silence_chunks = max(4, int(silence_duration / chunk_sec))
+            max_silence_chunks = max(5, int(silence_duration / chunk_sec))
             min_speech_chunks = max(4, int(0.28 / chunk_sec))
             start_wait = time.monotonic()
             speech_start_time = 0.0
-            threshold = self._energy_threshold
+
+            live_ambient = min(self._ambient_rms, 250.0) if allow_manual_stop else self._ambient_rms
+
+            def current_gate(amb: float) -> float:
+                if allow_manual_stop:
+                    # Manual Push-to-Talk: sensitive to normal laptop & Bluetooth Hands-Free speech (80+ RMS)
+                    # while still adapting upward if room ambient noise is loud.
+                    return max(80.0, min(1800.0, amb * 2.1 + 35.0))
+                # Background Wake-Word mode: strict close-talk gate so hall chatter never self-triggers
+                return self.compute_exhibition_threshold(amb, self.close_talk_threshold)
+
+            threshold = current_gate(live_ambient)
 
             while True:
                 if abort_on_manual_request and self.is_listening_manual:
@@ -612,37 +788,56 @@ class VoiceInterface:
                 if allow_manual_stop and self._stop_listen_event.is_set():
                     if speech_started and len(frames) >= 2:
                         break
+                    if (
+                        len(manual_all_frames) >= min_speech_chunks
+                        and max_seen_rms >= max(35.0, live_ambient * 1.35)
+                    ):
+                        return b"".join(manual_all_frames)
                     self.last_listen_error = "Listening stopped"
                     return None
 
-                raw = stream.read(self.CHUNK_SIZE, exception_on_overflow=False)
-                arr = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
-                rms = float(np.sqrt(np.mean(arr * arr))) if arr.size else 0.0
+                raw, rms = self._read_16k_chunk(stream, hw_rate, hw_chunk)
+                if not raw:
+                    continue
+                if rms > max_seen_rms:
+                    max_seen_rms = rms
+
+                if allow_manual_stop and len(manual_all_frames) < int(phrase_time_limit / chunk_sec):
+                    manual_all_frames.append(raw)
 
                 if not speech_started:
                     pre_roll.append(raw)
-                    if rms >= threshold * 1.35:
+                    required_hits = 1 if allow_manual_stop else 2
+                    if rms >= threshold * 1.25:
                         onset_hits += 2
                     elif rms >= threshold:
                         onset_hits += 1
                     else:
                         onset_hits = 0
-                        # Gently adapt ambient floor during quiet idle frames
-                        adapted = rms * 1.9 + 85.0
-                        threshold = 0.94 * threshold + 0.06 * max(170.0, min(850.0, adapted))
+                        idle_rms_history.append(rms)
+                        live_ambient = float(np.median(idle_rms_history))
+                        self._ambient_rms = 0.85 * self._ambient_rms + 0.15 * live_ambient
+                        threshold = current_gate(live_ambient)
                         self._energy_threshold = threshold
 
-                    if onset_hits >= 2:
+                    if onset_hits >= required_hits:
                         speech_started = True
                         speech_start_time = time.monotonic()
                         frames.extend(pre_roll)
                         silence_chunks = 0
                     elif (time.monotonic() - start_wait) >= timeout:
-                        self.last_listen_error = "No speech detected"
+                        if (
+                            allow_manual_stop
+                            and len(manual_all_frames) >= min_speech_chunks
+                            and max_seen_rms >= max(35.0, live_ambient * 1.35)
+                        ):
+                            return b"".join(manual_all_frames)
+                        self.last_listen_error = "No speech detected — check microphone or speak a bit louder"
                         return None
                 else:
                     frames.append(raw)
-                    if rms < threshold * 0.78:
+                    silence_floor = max(live_ambient * 1.45 + 15.0, threshold * 0.60)
+                    if rms < silence_floor:
                         silence_chunks += 1
                     else:
                         silence_chunks = 0
@@ -670,34 +865,79 @@ class VoiceInterface:
             except Exception:
                 pass
 
+    def _filter_hallucination(self, text: str) -> Optional[str]:
+        """
+        Reject Whisper noise hallucinations, non-English script output when locked to 'en',
+        and repetitive token loops (e.g. 'Hey Sesame Hey Sesame Hey Sesame').
+        """
+        if not text:
+            return None
+
+        cleaned = text.strip()
+        if self.voice_language == "en":
+            # Strip any stray non-ASCII characters; reject if non-Latin script dominated
+            ascii_only = re.sub(r"[^\x20-\x7E]", "", cleaned).strip()
+            if len(re.findall(r"[A-Za-z]", ascii_only)) < 2:
+                return None
+            if len(ascii_only) < len(cleaned) * 0.7:
+                return None
+            cleaned = re.sub(r"\s+", " ", ascii_only).strip()
+
+        norm = re.sub(r"[^\w\s]", " ", cleaned.lower())
+        norm = re.sub(r"\s+", " ", norm).strip()
+        if not norm or norm in SILENCE_HALLUCINATIONS:
+            return None
+
+        words = norm.split()
+        # Reject repetitive token loops (such as 'hey sesame hey sesame hey sesame')
+        if len(words) >= 4 and (len(set(words)) / float(len(words))) < 0.48:
+            return None
+
+        wake_tokens = {"hey", "hi", "ok", "okay", "sesame", "sesami"}
+        if len(words) >= 3 and all(w in wake_tokens for w in words) and norm.count("sesam") >= 2:
+            return None
+
+        return cleaned
+
     def transcribe_pcm(
         self, pcm_bytes: bytes, initial_prompt: Optional[str] = None
     ) -> Optional[str]:
-        """Transcribe 16kHz 16-bit mono PCM bytes locally using faster-whisper."""
+        """Transcribe 16kHz 16-bit mono PCM bytes locally with auto-gain normalization & hallucination guards."""
         if not pcm_bytes:
             return None
 
         audio_i16 = np.frombuffer(pcm_bytes, dtype=np.int16)
-        if audio_i16.size < int(self.SAMPLE_RATE * 0.18):
+        if audio_i16.size < int(self.SAMPLE_RATE * 0.20):
             return None
 
         audio_f32 = audio_i16.astype(np.float32) / 32768.0
-        peak_rms = float(np.sqrt(np.mean(audio_f32 * audio_f32)))
-        if peak_rms < 0.0025:
+        # Remove DC bias from laptop/headset ADC before checking energy
+        audio_f32 = audio_f32 - float(np.mean(audio_f32))
+        peak_abs = float(np.max(np.abs(audio_f32)))
+        rms = float(np.sqrt(np.mean(audio_f32 * audio_f32)))
+        if peak_abs < 0.002 or rms < 0.0006:
             return None
+
+        # Automatic Gain Control (AGC): boost quiet laptop/Bluetooth mics cleanly to -2.5 dBFS
+        gain = min(25.0, 0.75 / peak_abs)
+        if gain > 1.05:
+            audio_f32 = np.clip(audio_f32 * gain, -1.0, 1.0)
 
         model = self._ensure_whisper_model()
         segments, _info = model.transcribe(
             audio_f32,
+            language=self.voice_language,
             beam_size=1,
             best_of=1,
             temperature=0.0,
-            max_new_tokens=64,
-            vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=320, speech_pad_ms=200),
+            max_new_tokens=48,
+            compression_ratio_threshold=1.85,
+            log_prob_threshold=-1.0,
+            no_speech_threshold=0.65,
+            vad_filter=False,
             without_timestamps=True,
             condition_on_previous_text=False,
-            initial_prompt=initial_prompt or WHISPER_DOMAIN_PROMPT,
+            initial_prompt=initial_prompt,  # None by default — never prompt-echo 'Hey Sesame'
         )
 
         collected = []
@@ -705,20 +945,18 @@ class VoiceInterface:
             seg_text = (seg.text or "").strip()
             if not seg_text:
                 continue
-            if getattr(seg, "no_speech_prob", 0.0) > 0.82 and getattr(seg, "avg_logprob", 0.0) < -1.0:
+            if getattr(seg, "no_speech_prob", 0.0) > 0.72:
+                continue
+            if getattr(seg, "avg_logprob", 0.0) < -1.15:
+                continue
+            if getattr(seg, "compression_ratio", 1.0) > 1.85:
                 continue
             collected.append(seg_text)
 
-        text = " ".join(collected).strip()
-        if not text:
-            return None
+        raw_text = " ".join(collected).strip()
+        return self._filter_hallucination(raw_text)
 
-        if text.lower().strip(" !?,.") in SILENCE_HALLUCINATIONS and peak_rms < 0.012:
-            return None
-
-        return text
-
-    def listen(self, timeout: int = 5, phrase_time_limit: float = 10.0) -> Optional[str]:
+    def listen(self, timeout: int = 6, phrase_time_limit: float = 10.0) -> Optional[str]:
         """Listen for voice input and transcribe locally with zero startup cutoff."""
         if not self.voice_enabled:
             return None
@@ -733,7 +971,7 @@ class VoiceInterface:
                 pcm_bytes = self._capture_phrase_pcm(
                     timeout=float(timeout),
                     phrase_time_limit=float(phrase_time_limit),
-                    silence_duration=0.65,
+                    silence_duration=0.80,
                     allow_manual_stop=True,
                     abort_on_manual_request=False,
                 )
@@ -760,7 +998,10 @@ class VoiceInterface:
             self._stop_listen_event.clear()
 
     def _extract_wake_remainder(self, text: str) -> Optional[str]:
-        """Check if text contains the wake word and return any trailing command."""
+        """
+        Check if text contains the wake word and return any trailing command.
+        Strips all repeated leading wake words so 'Hey Sesame Hey Sesame' never becomes a command.
+        """
         lowered = re.sub(r"[^\w\s]", " ", text.lower())
         lowered = re.sub(r"\s+", " ", lowered).strip()
         if not lowered:
@@ -775,7 +1016,6 @@ class VoiceInterface:
             "hey sesami",
             "sesame",
         ]
-        # De-duplicate while preserving order
         seen = set()
         triggers = []
         for c in candidates:
@@ -784,20 +1024,33 @@ class VoiceInterface:
                 seen.add(c_norm)
                 triggers.append(c_norm)
 
+        matched_any = False
+        remainder = text.strip()
         for trig in triggers:
-            pattern = rf"\b{re.escape(trig)}\b(.*)$"
-            match = re.search(pattern, lowered)
-            if match:
-                # Extract clean remainder from original text roughly after trigger
+            pattern = rf"\b{re.escape(trig)}\b"
+            if re.search(pattern, lowered):
+                matched_any = True
                 orig_match = re.search(
                     rf"{re.escape(trig.split()[-1])}[\s,.:;!?-]*(.*)$",
-                    text,
+                    remainder,
                     flags=re.IGNORECASE,
                 )
-                remainder = (orig_match.group(1) if orig_match else match.group(1)).strip()
-                return remainder
+                if orig_match:
+                    remainder = orig_match.group(1).strip()
+                break
 
-        return None
+        if not matched_any:
+            return None
+
+        # Strip any repeated consecutive wake words from the remainder
+        wake_prefix_re = re.compile(
+            r"^(?:(?:hey|hi|ok|okay)[\s,.:;!?-]*)?sesam[ei][\s,.:;!?-]*",
+            flags=re.IGNORECASE,
+        )
+        while remainder and wake_prefix_re.match(remainder):
+            remainder = wake_prefix_re.sub("", remainder, count=1).strip()
+
+        return remainder
 
     def listen_for_wake_phrase(self, timeout: float = 2.5) -> Optional[str]:
         """
@@ -807,7 +1060,12 @@ class VoiceInterface:
           - "" if ONLY the wake word was spoken (caller should listen for follow-up)
           - "<command>" if user spoke wake word + command in one phrase
         """
-        if not self.voice_enabled or self.is_listening_manual or self.is_speaking:
+        if (
+            not self.voice_enabled
+            or self.is_listening_manual
+            or self.is_speaking
+            or time.monotonic() < self._mute_until
+        ):
             return None
 
         if not self.mic_lock.acquire(blocking=False):
@@ -816,7 +1074,7 @@ class VoiceInterface:
         try:
             pcm_bytes = self._capture_phrase_pcm(
                 timeout=timeout,
-                phrase_time_limit=4.5,
+                phrase_time_limit=4.0,
                 silence_duration=0.55,
                 allow_manual_stop=False,
                 abort_on_manual_request=True,
@@ -826,14 +1084,17 @@ class VoiceInterface:
         finally:
             self.mic_lock.release()
 
-        if not pcm_bytes or self.is_listening_manual:
+        if (
+            not pcm_bytes
+            or self.is_listening_manual
+            or self.is_speaking
+            or time.monotonic() < self._mute_until
+        ):
             return None
 
         try:
-            text = self.transcribe_pcm(
-                pcm_bytes,
-                initial_prompt=f"{self.wake_word}, Hey Sesame, dance, walk, wave, hello.",
-            )
+            # Never pass 'Hey Sesame' in initial_prompt — prevents Whisper prompt-echo hallucinations!
+            text = self.transcribe_pcm(pcm_bytes, initial_prompt=None)
             if not text:
                 return None
 
@@ -852,11 +1113,11 @@ class VoiceInterface:
 
     @staticmethod
     def _clean_tts_text(text: str) -> str:
-        """Strip bracketed UI face annotations before speaking."""
+        """Strip bracketed UI face annotations and emojis before speaking."""
         if not text:
             return ""
         cleaned = re.sub(r"\s*\[[^\]]*face\]\s*$", "", text, flags=re.IGNORECASE)
-        return cleaned.strip()
+        return strip_emojis(cleaned)
 
     @staticmethod
     def _contains_arabic_urdu_script(text: str) -> bool:
@@ -873,6 +1134,9 @@ class VoiceInterface:
         if not self.voice_enabled:
             return
 
+        self.is_speaking = True
+        self._mute_until = time.monotonic() + 2.0
+
         if async_mode:
             threading.Thread(
                 target=self._speak_sync,
@@ -886,6 +1150,7 @@ class VoiceInterface:
         """Synchronous speech helper with smooth robot mouth animation."""
         clean_text = self._clean_tts_text(text)
         if not clean_text:
+            self.is_speaking = False
             return
 
         try:
@@ -938,6 +1203,7 @@ class VoiceInterface:
             print(f"[ERROR] TTS error: {e}")
         finally:
             self.is_speaking = False
+            self._mute_until = time.monotonic() + 0.9
 
     @staticmethod
     def _init_pygame_mixer(sample_rate: int):
@@ -951,25 +1217,100 @@ class VoiceInterface:
             pygame.mixer.init(frequency=sample_rate, size=-16, channels=1, buffer=1024)
         return pygame
 
+    VOICE_STYLE_PRESETS = {
+        # (pitch_formant_scale, speed_scale, noise_scale, noise_w_scale)
+        "cute": (1.32, 1.08, 0.78, 0.90),     # Childlike / BMO-style cheerful buddy (+4.8 semitones)
+        "silly": (1.44, 1.12, 0.86, 0.96),    # Extra goofy tiny cartoon creature (+6.3 semitones)
+        "natural": (1.00, 1.00, 0.667, 0.80), # Original unshifted voice
+    }
+
+    @staticmethod
+    def _shift_vocal_tract_to_wav(
+        samples: np.ndarray,
+        orig_rate: int,
+        pitch_factor: float,
+        out_rate: int = 24000,
+    ) -> tuple[np.ndarray, int, bytes]:
+        """Shift pitch and vocal-tract formants upward cleanly into 24 kHz PCM WAV."""
+        if samples.size == 0:
+            buf = io.BytesIO()
+            with wave.open(buf, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(out_rate)
+                wf.writeframes(b"")
+            return samples, out_rate, buf.getvalue()
+
+        step = (pitch_factor * float(orig_rate)) / float(out_rate)
+        out_len = max(1, int(round(samples.size / step)))
+        src_positions = np.arange(out_len, dtype=np.float32) * step
+        src_indices = np.arange(samples.size, dtype=np.float32)
+        shifted = np.interp(src_positions, src_indices, samples).astype(np.float32)
+
+        peak = float(np.max(np.abs(shifted)))
+        if peak > 30500.0:
+            shifted *= 30500.0 / peak
+
+        pcm_int16 = np.clip(shifted, -32767.0, 32767.0).astype(np.int16)
+        out_buf = io.BytesIO()
+        with wave.open(out_buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(out_rate)
+            wf.writeframes(pcm_int16.tobytes())
+
+        return shifted, out_rate, out_buf.getvalue()
+
     def _speak_piper(
         self,
         text: str,
         face: Optional[str] = None,
         robot_controller=None,
     ):
-        """Synthesize natural local speech via Piper ONNX and animate mouth from audio envelope."""
+        """Synthesize cute childlike/silly local speech via Piper VITS + formant shift."""
         try:
             voice = self._ensure_piper_voice()
+            style_key = (self.voice_style or "cute").strip().lower()
+            pitch_factor, speed_factor, noise_scale, noise_w = self.VOICE_STYLE_PRESETS.get(
+                style_key, self.VOICE_STYLE_PRESETS["cute"]
+            )
+            env_pitch = os.getenv("PIPER_PITCH", "").strip()
+            if env_pitch:
+                try:
+                    pitch_factor = max(0.85, min(1.65, float(env_pitch)))
+                except ValueError:
+                    pass
+
+            syn_cfg = None
+            if SynthesisConfig is not None:
+                # Stretch neural phoneme durations beforehand so formant shift keeps crisp natural pacing
+                length_scale = pitch_factor / max(0.75, speed_factor)
+                syn_cfg = SynthesisConfig(
+                    length_scale=length_scale,
+                    noise_scale=noise_scale,
+                    noise_w_scale=noise_w,
+                )
+
             wav_buf = io.BytesIO()
             with wave.open(wav_buf, "wb") as wf:
-                voice.synthesize_wav(text, wf)
+                if syn_cfg is not None:
+                    voice.synthesize_wav(text, wf, syn_config=syn_cfg)
+                else:
+                    voice.synthesize_wav(text, wf)
 
-            wav_bytes = wav_buf.getvalue()
-            with wave.open(io.BytesIO(wav_bytes), "rb") as rf:
-                sample_rate = rf.getframerate()
+            raw_wav = wav_buf.getvalue()
+            with wave.open(io.BytesIO(raw_wav), "rb") as rf:
+                orig_rate = rf.getframerate()
                 pcm_frames = rf.readframes(rf.getnframes())
 
-            samples = np.frombuffer(pcm_frames, dtype=np.int16).astype(np.float32)
+            orig_samples = np.frombuffer(pcm_frames, dtype=np.int16).astype(np.float32)
+            if abs(pitch_factor - 1.0) > 0.02:
+                samples, sample_rate, wav_bytes = self._shift_vocal_tract_to_wav(
+                    orig_samples, orig_rate, pitch_factor=pitch_factor, out_rate=24000
+                )
+            else:
+                samples, sample_rate, wav_bytes = orig_samples, orig_rate, raw_wav
+
             pygame = self._init_pygame_mixer(sample_rate)
 
             if face and robot_controller:
@@ -1179,8 +1520,8 @@ class SesameRobotController:
             return {"error": str(e)}
 
     def stop(self) -> Dict[str, Any]:
-        """Stop the current robot action"""
-        return self.send_command("stop")
+        """Put the robot into rest state"""
+        return self.send_command("rest")
 
 
 
@@ -1237,54 +1578,120 @@ class GeminiInterface:
 
 from groq import Groq
 
+OLLAMA_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "command": {
+            "anyOf": [
+                {"type": "string", "enum": AVAILABLE_COMMANDS},
+                {"type": "null"},
+            ]
+        },
+        "face": {
+            "anyOf": [
+                {"type": "string", "enum": AVAILABLE_FACES},
+                {"type": "null"},
+            ]
+        },
+        "response": {"type": "string"},
+    },
+    "required": ["command", "face", "response"],
+    "additionalProperties": False,
+}
+
+
 class GroqInterface:
-    def __init__(self, api_key: str, model: str | None = None):
-        self.client = Groq(api_key=api_key)
+    def __init__(
+        self,
+        api_key: str | None,
+        model: str | None = None,
+        history: Optional[collections.deque] = None,
+    ):
+        clean_key = (api_key or "").strip()
+        self.api_key_configured = bool(clean_key and clean_key != "your_groq_api_key_here")
+        self.client = Groq(api_key=clean_key) if self.api_key_configured else None
         self.model = model or os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
         self.personality = "silly"
         self.timeout_seconds = float(os.getenv("GROQ_TIMEOUT_SECONDS", "8"))
+        self.history = history if history is not None else collections.deque(maxlen=12)
 
-    def interpret_command(self, user_input: str) -> Dict[str, Any]:
+    def _record_turn(self, user_input: str, result: Dict[str, Any]) -> None:
+        resp_text = strip_emojis(str(result.get("response", "") or "")).strip()
+        if not resp_text:
+            return
+        assistant_json = json.dumps(
+            {
+                "command": result.get("command"),
+                "face": result.get("face"),
+                "response": resp_text,
+            },
+            ensure_ascii=True,
+        )
+        self.history.append({"role": "user", "content": user_input})
+        self.history.append({"role": "assistant", "content": assistant_json})
+
+    def try_interpret(
+        self,
+        user_input: str,
+        timeout: Optional[float] = None,
+        record_history: bool = True,
+    ) -> Optional[Dict[str, Any]]:
+        """Attempt Groq cloud completion within timeout; return None on failure so caller can fail over."""
+        if not self.client:
+            return None
+        effective_timeout = timeout if timeout is not None else self.timeout_seconds
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         try:
             future = executor.submit(self._call_groq, user_input)
-            result = future.result(timeout=self.timeout_seconds)
+            result = future.result(timeout=effective_timeout)
             result["source"] = "groq"
+            if record_history:
+                self._record_turn(user_input, result)
             return result
         except concurrent.futures.TimeoutError:
-            print(f"[WARNING] Groq request timed out after {self.timeout_seconds}s. Falling back to local response.")
+            print(f"[WARNING] Groq timed out after {effective_timeout}s.")
         except Exception as exc:
-            print(f"[WARNING] Groq failed ({type(exc).__name__}: {exc}). Falling back to local response.")
+            print(f"[WARNING] Groq unavailable ({type(exc).__name__}: {exc}).")
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
+        return None
 
+    def interpret_command(self, user_input: str) -> Dict[str, Any]:
+        result = self.try_interpret(user_input, record_history=True)
+        if result is not None:
+            return result
         fallback = get_local_response(user_input, self.personality)
         fallback["source"] = "local_fallback"
+        self._record_turn(user_input, fallback)
         return fallback
 
     def _call_groq(self, user_input: str) -> Dict[str, Any]:
         if self.personality == "intelligent":
-            personality = "Be calm, articulate, and helpful."
+            personality = (
+                "Be a warm, calm, articulate, and insightful AI pet companion. "
+                "Remember what your human shares, answer questions clearly, test ideas or quiz them when asked, offer thoughtful encouragement, and build on earlier messages."
+            )
         else:
-            personality = "Be silly, warm, and simple. Occasionally be sarcastic or playfully annoyed, but stay friendly and never cruel."
+            personality = "Be a silly, affectionate, and playful AI pet companion. Occasionally be playfully sassy, but stay friendly and never cruel."
 
-        prompt = f"""You are Sesame, a small robot companion. {personality}
-Return exactly one valid JSON object and nothing else.
-Use exactly these fields: command, face, response, reasoning.
+        system_prompt = f"""You are Sesame, a small physical 4-legged robot companion. Your name is Sesame (never say your name is 'I'). {personality}
+Return ONLY one valid JSON object with fields: command, face, response, reasoning.
 command must be null or one of: {', '.join(AVAILABLE_COMMANDS)}.
 face must be null or one of: {', '.join(AVAILABLE_FACES)}.
-Use command only when the user directly requests an action. Otherwise use command=null.
-Use a face for conversation. A greeting may use command=wave and face=happy.
-Keep response to one or two short sentences. Keep reasoning to one short sentence.
-User: {user_input}"""
+Use command only when the user directly requests a physical action (or greeting -> command="wave", face="happy"). Otherwise set command=null.
+Keep response to 1-2 short plain-text sentences with NO emojis. Keep reasoning to one short sentence."""
+
+        recent_turns = list(self.history)[-10:]
+        messages = [
+            {"role": "system", "content": system_prompt},
+            *recent_turns,
+            {"role": "user", "content": user_input},
+        ]
 
         chat_completion = self.client.chat.completions.create(
-            messages=[
-                {"role": "system", "content": "You are Sesame, a small, chatty robot. Your name is Sesame. Never say your name is 'I'. Always introduce yourself as Sesame."},
-                {"role": "user", "content": prompt},
-            ],
+            messages=messages,
             model=self.model,
-            temperature=0.9,
+            temperature=0.85,
             max_completion_tokens=1024,
             reasoning_effort="low",
             response_format={"type": "json_object"},
@@ -1306,9 +1713,315 @@ User: {user_input}"""
         if not isinstance(result, dict):
             raise ValueError("Groq JSON response was not an object")
         return result
-    
+
+
+class OllamaInterface:
+    """Lightweight offline LLM client tuned for 8 GB RAM + dual-core CPU via Ollama."""
+
+    GREETING_TOKENS = {"hi", "hello", "hey", "howdy", "greetings", "yo"}
+    OPEN_ACTION_CUES = ("trick", "move", "something cool", "show me", "stretch", "workout", "celebrate")
+
+    def __init__(
+        self,
+        model: Optional[str] = None,
+        base_url: Optional[str] = None,
+        history: Optional[collections.deque] = None,
+    ):
+        self.base_url = (base_url or os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")).rstrip("/")
+        if not self.base_url.startswith("http"):
+            self.base_url = f"http://{self.base_url}"
+        self.configured_model = (model or os.getenv("OLLAMA_MODEL", "qwen2.5:0.5b")).strip() or "qwen2.5:0.5b"
+        self.active_model = self.configured_model
+        self.personality = "silly"
+        self.num_ctx = max(768, int(os.getenv("OLLAMA_NUM_CTX", "768")))
+        self.num_threads = int(os.getenv("OLLAMA_NUM_THREADS", "2"))
+        self.timeout_seconds = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "14"))
+        self.history = history if history is not None else collections.deque(maxlen=12)
+
+    def _record_turn(self, user_input: str, result: Dict[str, Any]) -> None:
+        resp_text = strip_emojis(str(result.get("response", "") or "")).strip()
+        if not resp_text:
+            return
+        assistant_json = json.dumps(
+            {
+                "command": result.get("command"),
+                "face": result.get("face"),
+                "response": resp_text,
+            },
+            ensure_ascii=True,
+        )
+        self.history.append({"role": "user", "content": user_input})
+        self.history.append({"role": "assistant", "content": assistant_json})
+
+    def check_health(self) -> Dict[str, Any]:
+        """Inspect local Ollama daemon and resolve the best installed lightweight model."""
+        try:
+            resp = requests.get(f"{self.base_url}/api/tags", timeout=1.2)
+            if resp.status_code != 200:
+                return {"running": False, "ready": False, "models": [], "active_model": self.configured_model}
+            data = resp.json()
+            installed = [m.get("name", "") for m in data.get("models", []) if m.get("name")]
+            resolved = self._resolve_model_name(installed)
+            if resolved:
+                self.active_model = resolved
+                return {
+                    "running": True,
+                    "ready": True,
+                    "models": installed,
+                    "active_model": resolved,
+                }
+            return {
+                "running": True,
+                "ready": False,
+                "models": installed,
+                "active_model": self.configured_model,
+            }
+        except Exception:
+            return {"running": False, "ready": False, "models": [], "active_model": self.configured_model}
+
+    def _resolve_model_name(self, installed: list[str]) -> Optional[str]:
+        if not installed:
+            return None
+        target = self.configured_model.lower()
+        for name in installed:
+            low = name.lower()
+            if low == target or low == f"{target}:latest" or low.split(":")[0] == target:
+                return name
+        # Prefer smallest RAM-safe models if user pulled a slightly different tag
+        preferred_prefixes = ("qwen2.5:0.5b", "smollm2", "llama3.2:1b", "gemma3:1b", "qwen2.5:1.5b", "qwen2.5")
+        for prefix in preferred_prefixes:
+            for name in installed:
+                if name.lower().startswith(prefix):
+                    return name
+        return installed[0]
+
+    def warmup(self) -> Dict[str, Any]:
+        """Pre-load the compact model into RAM so the first offline turn has zero cold-load lag."""
+        health = self.check_health()
+        if not health.get("ready"):
+            return health
+        try:
+            requests.post(
+                f"{self.base_url}/api/chat",
+                json={
+                    "model": self.active_model,
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "stream": False,
+                    "keep_alive": "30m",
+                    "options": {
+                        "num_ctx": 128,
+                        "num_thread": self.num_threads,
+                        "num_predict": 1,
+                    },
+                },
+                timeout=15,
+            )
+        except Exception as exc:
+            print(f"[WARNING] Ollama warmup skipped: {exc}")
+        return health
+
+    @classmethod
+    def _is_greeting(cls, text: str) -> bool:
+        words = re.findall(r"[a-z]+", text.lower())
+        return bool(words) and len(words) <= 6 and any(w in cls.GREETING_TOKENS for w in words)
+
+    def try_interpret(
+        self,
+        user_input: str,
+        record_history: bool = True,
+    ) -> Optional[Dict[str, Any]]:
+        """Generate structured JSON response locally via Ollama."""
+        try:
+            result = self._call_ollama(user_input, self.active_model)
+            result["source"] = f"ollama:{self.active_model}"
+            if record_history:
+                self._record_turn(user_input, result)
+            return result
+        except Exception as first_exc:
+            # Re-check installed models once in case Ollama just finished pulling a model
+            health = self.check_health()
+            if health.get("ready") and self.active_model != self.configured_model:
+                try:
+                    result = self._call_ollama(user_input, self.active_model)
+                    result["source"] = f"ollama:{self.active_model}"
+                    if record_history:
+                        self._record_turn(user_input, result)
+                    return result
+                except Exception as retry_exc:
+                    print(f"[WARNING] Ollama retry failed ({retry_exc}).")
+            else:
+                print(f"[WARNING] Local Ollama unavailable ({type(first_exc).__name__}: {first_exc}).")
+        return None
+
+    def interpret_command(self, user_input: str) -> Dict[str, Any]:
+        result = self.try_interpret(user_input, record_history=True)
+        if result is not None:
+            return result
+        fallback = get_local_response(user_input, self.personality)
+        fallback["source"] = "local_fallback"
+        self._record_turn(user_input, fallback)
+        return fallback
+
+    def _call_ollama(self, user_input: str, model_name: str) -> Dict[str, Any]:
+        hint_cmd = detect_command(user_input)
+        is_greeting = self._is_greeting(user_input)
+        lower_in = user_input.lower()
+        allows_open_action = any(cue in lower_in for cue in self.OPEN_ACTION_CUES)
+
+        if self.personality == "intelligent":
+            system_msg = (
+                "Your name is Sesame, a smart, calm, and insightful 4-legged AI pet companion robot. "
+                "Address the human as friend (never call them Sesame). "
+                "Remember earlier messages and reply in 1 or 2 warm, articulate sentences under 22 words. Never use emojis."
+            )
+        else:
+            system_msg = (
+                "Your name is Sesame, a cute physical 4-legged AI pet companion robot with real moving legs. "
+                "Address the human as friend (never call them Sesame). "
+                "Reply in 1 or 2 playful sentences under 20 words. Never use emojis."
+            )
+
+        if hint_cmd:
+            rule_hint = (
+                f'You ARE performing physical trick "{hint_cmd}" right now! '
+                f'Set command="{hint_cmd}", face=null, and cheerfully announce doing {hint_cmd}.'
+            )
+        elif is_greeting:
+            rule_hint = 'Greet the human warmly while waving: set command="wave", face="happy".'
+        elif allows_open_action:
+            rule_hint = f"Pick a physical trick you are doing now from [{', '.join(AVAILABLE_COMMANDS)}], face=null."
+        else:
+            rule_hint = f"Chat only: command=null, pick face from [{', '.join(AVAILABLE_FACES)}]."
+
+        # Keep last 3 full exchanges (6 messages) so Sesame remembers multi-turn context within 8GB RAM budget
+        recent_turns = list(self.history)[-6:]
+
+        payload = {
+            "model": model_name,
+            "messages": [
+                {"role": "system", "content": system_msg},
+                *recent_turns,
+                {"role": "user", "content": f"{rule_hint}\nUser: {user_input}"},
+            ],
+            "format": OLLAMA_JSON_SCHEMA,
+            "stream": False,
+            "keep_alive": "30m",
+            "options": {
+                "num_ctx": self.num_ctx,
+                "num_thread": max(self.num_threads, 3),
+                "num_predict": 160,
+                "temperature": 0.6,
+            },
+        }
+
+        resp = requests.post(
+            f"{self.base_url}/api/chat",
+            json=payload,
+            timeout=self.timeout_seconds,
+        )
+        if resp.status_code != 200:
+            raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:140]}")
+
+        body = resp.json()
+        content = (body.get("message", {}) or {}).get("content", "").strip()
+        if not content:
+            raise ValueError("Ollama returned empty content")
+
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
+            # Salvage partial response if token limit ever truncates closing brace
+            match = re.search(r'"response"\s*:\s*"([^"]*)', content)
+            if not match:
+                raise
+            parsed = {
+                "command": hint_cmd,
+                "face": "happy",
+                "response": match.group(1).strip(),
+            }
+
+        if not isinstance(parsed, dict):
+            raise ValueError("Ollama JSON output was not an object")
+        parsed.setdefault("reasoning", "")
+
+        # Keep small models disciplined so pure chat never triggers random motors
+        if hint_cmd:
+            parsed["command"] = hint_cmd
+            parsed["face"] = "happy" if hint_cmd == "wave" and is_greeting else None
+        elif is_greeting:
+            parsed["command"] = "wave"
+            parsed["face"] = "happy"
+        elif not allows_open_action:
+            parsed["command"] = None
+            if parsed.get("face") not in AVAILABLE_FACES:
+                parsed["face"] = "happy"
+
+        return parsed
+
+
+class HybridAIInterface:
+    """Routes companion turns across Auto (Cloud -> Local Ollama), Offline Ollama, or Groq Cloud."""
+
+    VALID_MODES = {"auto", "ollama", "groq"}
+
+    def __init__(
+        self,
+        groq_api_key: Optional[str],
+        groq_model: Optional[str] = None,
+        ollama_model: Optional[str] = None,
+        mode: Optional[str] = None,
+    ):
+        configured_mode = (mode or os.getenv("AI_PROVIDER", "auto")).strip().lower()
+        self.mode = configured_mode if configured_mode in self.VALID_MODES else "auto"
+        self._personality = "silly"
+        self.history = collections.deque(maxlen=12)
+        self.groq = GroqInterface(groq_api_key, groq_model, history=self.history)
+        self.ollama = OllamaInterface(ollama_model, history=self.history)
+        self.auto_cloud_timeout = float(os.getenv("GROQ_AUTO_TIMEOUT_SECONDS", "3.0"))
+
+    @property
+    def personality(self) -> str:
+        return self._personality
+
+    @personality.setter
+    def personality(self, value: str) -> None:
+        self._personality = value
+        self.groq.personality = value
+        self.ollama.personality = value
+
+    def interpret_command(self, user_input: str) -> Dict[str, Any]:
+        if self.mode == "ollama":
+            local_llm = self.ollama.try_interpret(user_input)
+            if local_llm is not None:
+                return local_llm
+            fallback = get_local_response(user_input, self._personality)
+            fallback["source"] = "local_fallback"
+            return fallback
+
+        if self.mode == "groq":
+            cloud_res = self.groq.try_interpret(user_input)
+            if cloud_res is not None:
+                return cloud_res
+            fallback = get_local_response(user_input, self._personality)
+            fallback["source"] = "local_fallback"
+            return fallback
+
+        # Default "auto" mode: fast Groq Cloud with instant failover to Local Ollama -> Keyword Fallback
+        cloud_res = self.groq.try_interpret(user_input, timeout=self.auto_cloud_timeout)
+        if cloud_res is not None:
+            return cloud_res
+
+        local_llm = self.ollama.try_interpret(user_input)
+        if local_llm is not None:
+            return local_llm
+
+        fallback = get_local_response(user_input, self._personality)
+        fallback["source"] = "local_fallback"
+        return fallback
+
+
 class SesameCompanionApp:
-    """Main application combining Gemini AI and robot control"""
+    """Main application combining Cloud/Local AI and robot control"""
 
     def __init__(
         self,
@@ -1322,7 +2035,12 @@ class SesameCompanionApp:
         self.robot = SesameRobotController(robot_ip)
         self.runtime_status = {}
 
-        self.ai = GroqInterface(os.getenv("GROQ_API_KEY"), os.getenv("GROQ_MODEL", "openai/gpt-oss-20b"))
+        self.ai = HybridAIInterface(
+            groq_api_key=os.getenv("GROQ_API_KEY"),
+            groq_model=os.getenv("GROQ_MODEL", "openai/gpt-oss-20b"),
+            ollama_model=os.getenv("OLLAMA_MODEL", "qwen2.5:0.5b"),
+            mode=os.getenv("AI_PROVIDER", "auto"),
+        )
 
         self.voice = VoiceInterface(
             voice_enabled, tts_engine, gemini_api_key, wake_word
@@ -1333,18 +2051,36 @@ class SesameCompanionApp:
         self.runtime_status = self.validate_runtime_config()
 
     def validate_runtime_config(self) -> Dict[str, str]:
-        """Check whether the runtime environment is ready for end users."""
+        """Check whether Cloud and/or Offline Local Ollama AI are ready."""
+        ollama_health = self.ai.ollama.check_health()
+        groq_ready = self.ai.groq.api_key_configured
+        ollama_ready = bool(ollama_health.get("ready"))
+        ollama_running = bool(ollama_health.get("running"))
+
         status = {
-            "mode": "groq",
-            "groq_api_key": "missing" if not os.getenv("GROQ_API_KEY") else "configured",
-            "groq_model": os.getenv("GROQ_MODEL", "openai/gpt-oss-20b"),
+            "mode": self.ai.mode,
+            "groq_api_key": "configured" if groq_ready else "missing",
+            "groq_model": self.ai.groq.model,
+            "ollama_status": (
+                f"ready ({ollama_health.get('active_model')})"
+                if ollama_ready
+                else ("model missing" if ollama_running else "not running")
+            ),
+            "ollama_model": str(ollama_health.get("active_model") or self.ai.ollama.configured_model),
+            "warning": "No configuration warning.",
         }
 
-        if status["mode"] == "groq" and status["groq_api_key"] == "missing":
-            status["warning"] = "GROQ_API_KEY is missing. Groq responses will fail unless a key is configured."
-        else:
-            status["warning"] = "No configuration warning."
+        if self.ai.mode == "ollama" and not ollama_ready:
+            status["warning"] = (
+                f"Local Ollama model '{self.ai.ollama.configured_model}' not ready yet "
+                f"(run: ollama pull {self.ai.ollama.configured_model}). Using keyword fallback until ready."
+            )
+        elif self.ai.mode == "groq" and not groq_ready:
+            status["warning"] = "GROQ_API_KEY is missing. Groq responses will use local fallback."
+        elif self.ai.mode == "auto" and not groq_ready and not ollama_ready:
+            status["warning"] = "Neither Groq key nor local Ollama model is ready yet; using keyword fallback."
 
+        self.runtime_status = status
         return status
 
     def get_runtime_status(self) -> Dict[str, str]:

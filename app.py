@@ -12,13 +12,16 @@ import threading
 import traceback
 import webview
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ENV_PATH = os.path.join(BASE_DIR, ".env")
+
 try:
     from dotenv import load_dotenv
-    load_dotenv(override=True)
+    load_dotenv(dotenv_path=ENV_PATH, override=True)
 except ImportError:
     print("[WARNING] python-dotenv not installed. .env file will be ignored.")
 
-from sesame_companion import SesameCompanionApp, SesameRobotController, AVAILABLE_COMMANDS, AVAILABLE_FACES
+from sesame_companion import SesameCompanionApp, SesameRobotController, VoiceInterface, AVAILABLE_COMMANDS, AVAILABLE_FACES
 from local_fallback import get_local_response
 
 
@@ -37,8 +40,12 @@ class Api:
         self._gemini_api_key = os.getenv("GEMINI_API_KEY", "")
         self._voice_enabled = os.getenv("VOICE_ENABLED", "true").lower() == "true"
         self._tts_engine = os.getenv("TTS_ENGINE", "piper")
+        self._voice_style = (os.getenv("PIPER_VOICE_STYLE", "cute").strip().lower() or "cute")
+        self._mic_device = os.getenv("MIC_DEVICE_INDEX", "").strip()
         self._wake_word = os.getenv("WAKE_WORD", "hey sesame")
         self._wake_word_mode = os.getenv("WAKE_WORD_MODE", "false").lower() == "true"
+        self._ai_mode = (os.getenv("AI_PROVIDER", "auto").strip().lower() or "auto")
+        self._ollama_model = (os.getenv("OLLAMA_MODEL", "qwen2.5:0.5b").strip() or "qwen2.5:0.5b")
         self._personality = "silly"
         self._wake_thread_started = False
         self._closing = False
@@ -54,6 +61,41 @@ class Api:
         except Exception:
             pass
 
+    @staticmethod
+    def _format_ai_label(status):
+        mode = status.get("mode", "auto")
+        groq_ok = status.get("groq_api_key") == "configured"
+        ollama_ok = str(status.get("ollama_status", "")).startswith("ready")
+        ollama_model = status.get("ollama_model", "qwen2.5:0.5b")
+
+        if mode == "ollama":
+            return f"Local Ready ({ollama_model})" if ollama_ok else "Ollama missing model"
+        if mode == "groq":
+            return "Groq Cloud Ready" if groq_ok else "Groq key missing"
+        # auto mode
+        if groq_ok and ollama_ok:
+            return f"Auto Ready (Cloud + {ollama_model})"
+        if ollama_ok:
+            return f"Auto Ready (Local {ollama_model})"
+        if groq_ok:
+            return "Auto Ready (Groq Cloud)"
+        return "Keyword Fallback"
+
+    def _warmup_ollama_async(self):
+        """Pre-load compact local Ollama model into RAM without blocking window startup."""
+        def run():
+            if not self._app or not hasattr(self._app.ai, "ollama"):
+                return
+            health = self._app.ai.ollama.warmup()
+            status = self._app.validate_runtime_config()
+            ai_label = self._format_ai_label(status)
+            self._js(f"applyAiStatus('{self._escape_js(ai_label)}')")
+            if health.get("ready"):
+                self._js(
+                    f"addMessage('system', '[Config] Local Ollama warm ({self._escape_js(str(health.get('active_model')))})')"
+                )
+        threading.Thread(target=run, daemon=True).start()
+
     # ── Initialization (called from background thread) ──────
     def _initialize_backend(self):
         """Initialize the companion app backend."""
@@ -68,21 +110,21 @@ class Api:
             )
 
             # Report AI status
-            status = self._app.get_runtime_status()
-            if status.get("groq_api_key") == "missing":
-                ai_label = "AI: Groq key missing"
-            else:
-                ai_label = "AI: Groq ready"
+            status = self._app.get_runtime_config() if hasattr(self._app, "get_runtime_config") else self._app.get_runtime_status()
+            ai_label = self._format_ai_label(status)
 
-            self._js(f"applyAiStatus('{ai_label}')")
+            self._js(f"applyAiStatus('{self._escape_js(ai_label)}')")
             self._js("addMessage('system', '[OK] Backend initialized')")
 
-            config_msg = f"mode={status.get('mode')} model={status.get('groq_model')}"
-            self._js(f"addMessage('system', '[Config] {config_msg}')")
+            config_msg = (
+                f"mode={status.get('mode')} groq={status.get('groq_model')} "
+                f"ollama={status.get('ollama_status')}"
+            )
+            self._js(f"addMessage('system', '[Config] {self._escape_js(config_msg)}')")
 
             warning = status.get("warning", "")
             if warning and warning != "No configuration warning.":
-                self._js(f"addMessage('system', '[Warning] {self._escape_js(warning)}')")
+                self._js(f"addMessage('system', '[Config] {self._escape_js(warning)}')")
 
             # Warm up local Whisper STT + Piper neural TTS + mic noise floor once
             voice_info = self._app.voice.warmup()
@@ -95,6 +137,10 @@ class Api:
             elif voice_info.get("stt_error"):
                 err_msg = f"[Warning] Local STT init issue: {voice_info['stt_error']}"
                 self._js(f"addMessage('system', '{self._escape_js(err_msg)}')")
+
+            # Warm up compact local Ollama model in background if enabled
+            if self._ai_mode in {"auto", "ollama"}:
+                self._warmup_ollama_async()
 
             # Check robot connection
             self._check_connection()
@@ -167,12 +213,13 @@ class Api:
 
                     if remainder:
                         self._js(f"onWakeWordTranscript({json.dumps(remainder)})")
-                        time.sleep(0.5)
+                        time.sleep(1.5)
                     else:
                         self._js("addMessage('system', 'Wake word heard — speak now...')")
                         followup = self._app.voice.listen(timeout=5)
                         if followup:
                             self._js(f"onWakeWordTranscript({json.dumps(followup)})")
+                            time.sleep(1.5)
                         else:
                             self._js("addMessage('system', 'No command heard after wake word')")
                 except Exception as e:
@@ -194,8 +241,12 @@ class Api:
             "voice_enabled": self._voice_enabled,
             "wake_word_mode": self._wake_word_mode,
             "tts_engine": self._tts_engine,
+            "voice_style": self._voice_style,
+            "mic_device": self._mic_device,
+            "mic_devices": VoiceInterface.list_input_devices(),
+            "ai_mode": self._ai_mode,
             "personality": self._personality,
-            "ai_status": "AI: checking...",
+            "ai_status": "Checking...",
             "status": {"connected": False, "face": "default", "command": "none"},
         }
 
@@ -238,6 +289,10 @@ class Api:
 
     def _speak_async(self, text, face):
         """Speak text in a background thread with face animation."""
+        if self._app and self._app.voice:
+            self._app.voice.is_speaking = True
+            self._app.voice._mute_until = time.monotonic() + 2.0
+
         def do_speak():
             self._js(f"setSpeakingState(true, {json.dumps(face)})")
             try:
@@ -297,21 +352,29 @@ class Api:
             return {"error": str(e)}
 
     def get_status(self):
-        """Get current robot status."""
+        """Get current robot status and refresh AI health."""
         if not self._app:
             return {"connected": False}
 
         try:
+            if hasattr(self._app, "validate_runtime_config"):
+                ai_cfg = self._app.validate_runtime_config()
+                self._js(f"applyAiStatus('{self._escape_js(self._format_ai_label(ai_cfg))}')")
+        except Exception:
+            pass
+
+        try:
             status = self._app.robot.get_status()
             if "error" in status:
-                return {"connected": False}
+                return {"connected": False, "mic_devices": VoiceInterface.list_input_devices()}
             return {
                 "connected": True,
                 "face": status.get("currentFace", "default"),
                 "command": status.get("currentCommand", "none") or "none",
+                "mic_devices": VoiceInterface.list_input_devices(),
             }
         except Exception:
-            return {"connected": False}
+            return {"connected": False, "mic_devices": VoiceInterface.list_input_devices()}
 
     def toggle_listening(self):
         """Start voice recognition and return transcribed text."""
@@ -344,13 +407,46 @@ class Api:
             "voice": lambda v: self._set_voice(v),
             "wake_word": lambda v: self._set_wake_word(v),
             "tts": lambda v: self._set_tts(v),
+            "voice_style": lambda v: self._set_voice_style(v),
+            "mic_device": lambda v: self._set_mic_device(v),
             "personality": lambda v: self._set_personality(v),
+            "ai_mode": lambda v: self._set_ai_mode(v),
+            "robot_ip": lambda v: self._set_robot_ip(v),
         }
 
         handler = messages.get(key)
         if handler:
             return handler(value)
         return {"error": f"Unknown setting: {key}"}
+
+    @staticmethod
+    def _save_env_key(env_key, env_value):
+        """Persist a single key=value into .env without disturbing existing keys or comments."""
+        try:
+            lines = []
+            if os.path.exists(ENV_PATH):
+                with open(ENV_PATH, "r", encoding="utf-8") as fh:
+                    lines = fh.read().splitlines()
+
+            updated = False
+            new_lines = []
+            for line in lines:
+                stripped = line.strip()
+                if not stripped.startswith("#") and "=" in stripped:
+                    k = stripped.split("=", 1)[0].strip()
+                    if k == env_key:
+                        new_lines.append(f"{env_key}={env_value}")
+                        updated = True
+                        continue
+                new_lines.append(line)
+
+            if not updated:
+                new_lines.append(f"{env_key}={env_value}")
+
+            with open(ENV_PATH, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(new_lines) + "\n")
+        except Exception as exc:
+            print(f"[WARNING] Could not persist {env_key} to .env: {exc}")
 
     def _set_voice(self, enabled):
         self._voice_enabled = enabled
@@ -374,11 +470,82 @@ class Api:
             self._app.tts_engine = engine
         return {"message": f"TTS engine: {engine}"}
 
+    def _set_voice_style(self, style):
+        clean_style = str(style or "cute").strip().lower()
+        if clean_style not in {"cute", "silly", "natural"}:
+            return {"error": f"Unsupported voice style: {clean_style}"}
+        self._voice_style = clean_style
+        os.environ["PIPER_VOICE_STYLE"] = clean_style
+        self._save_env_key("PIPER_VOICE_STYLE", clean_style)
+        if self._app and self._app.voice:
+            self._app.voice.voice_style = clean_style
+            if self._voice_enabled and self._tts_engine == "piper":
+                self._speak_async("Hi friend! Ready to hang out?", "happy")
+        return {"message": f"Voice character: {clean_style}"}
+
+    def _set_mic_device(self, raw_idx):
+        val = str(raw_idx if raw_idx is not None else "").strip()
+        if val == "" or val.lower() == "default":
+            self._mic_device = ""
+            os.environ.pop("MIC_DEVICE_INDEX", None)
+            if self._app and self._app.voice:
+                self._app.voice.microphone_device_index = None
+                self._app.voice._ambient_rms = 35.0
+            return {"message": "Microphone: Windows System Default"}
+        try:
+            idx = int(val)
+        except ValueError:
+            return {"error": f"Invalid microphone index: {val}"}
+        self._mic_device = str(idx)
+        os.environ["MIC_DEVICE_INDEX"] = str(idx)
+        if self._app and self._app.voice:
+            self._app.voice.microphone_device_index = idx
+            self._app.voice._ambient_rms = 35.0
+        return {"message": f"Microphone switched to device #{idx}"}
+
     def _set_personality(self, personality):
         self._personality = personality
         if self._app and hasattr(self._app, 'ai') and hasattr(self._app.ai, 'personality'):
             self._app.ai.personality = personality
         return {"message": f"Personality set to: {personality}"}
+
+    def _set_ai_mode(self, mode):
+        clean_mode = str(mode or "auto").strip().lower()
+        if clean_mode not in {"auto", "ollama", "groq"}:
+            return {"error": f"Unsupported AI mode: {clean_mode}"}
+
+        self._ai_mode = clean_mode
+        os.environ["AI_PROVIDER"] = clean_mode
+        self._save_env_key("AI_PROVIDER", clean_mode)
+
+        ai_label = f"Mode: {clean_mode}"
+        if self._app and hasattr(self._app, "ai"):
+            self._app.ai.mode = clean_mode
+            if hasattr(self._app, "validate_runtime_config"):
+                status = self._app.validate_runtime_config()
+                ai_label = self._format_ai_label(status)
+                self._js(f"applyAiStatus('{self._escape_js(ai_label)}')")
+            if clean_mode in {"auto", "ollama"}:
+                self._warmup_ollama_async()
+
+        return {"message": f"AI brain mode: {clean_mode} ({ai_label})", "ai_status": ai_label}
+
+    def _set_robot_ip(self, raw_ip):
+        clean_ip = str(raw_ip or "").strip()
+        clean_ip = clean_ip.replace("http://", "").replace("https://", "").strip().rstrip("/")
+        if not clean_ip:
+            return {"error": "Robot IP cannot be empty"}
+
+        self._robot_ip = clean_ip
+        os.environ["SESAME_ROBOT_IP"] = clean_ip
+        self._save_env_key("SESAME_ROBOT_IP", clean_ip)
+
+        if self._app:
+            self._app.robot = SesameRobotController(clean_ip)
+            threading.Thread(target=self._check_connection, daemon=True).start()
+
+        self._js(f"applyIpAddress('{self._escape_js(clean_ip)}')")
+        return {"message": f"Robot IP updated to {clean_ip} (saved to .env)", "ip": clean_ip}
 
 
 def main():
@@ -401,7 +568,7 @@ def main():
         width=1200,
         height=820,
         min_size=(1000, 700),
-        background_color="#050810",
+        background_color="#FAF7F2",
         text_select=False,
     )
 

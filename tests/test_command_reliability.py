@@ -4,11 +4,14 @@ from unittest.mock import patch
 from app import Api
 from local_fallback import detect_command, get_local_response
 from sesame_companion import (
+    HybridAIInterface,
+    OllamaInterface,
     SesameCompanionApp,
     SesameRobotController,
     VoiceInterface,
     normalize_interpretation,
     sr,
+    strip_emojis,
 )
 
 
@@ -74,6 +77,19 @@ class CommandReliabilityTests(unittest.TestCase):
     def test_fallback_supports_command_alias_phrases(self):
         self.assertEqual(detect_command("Do a push-up"), "pushup")
         self.assertEqual(detect_command("Could you do a crab walk?"), "crab")
+        self.assertEqual(detect_command("stop"), "rest")
+        self.assertEqual(detect_command("take a rest"), "rest")
+
+    def test_stop_command_normalizes_to_rest(self):
+        self.assertEqual(normalize_interpretation({"command": "stop"})["command"], "rest")
+        self.assertEqual(
+            SesameRobotController("mock").send_command("stop"),
+            {"status": "success", "mock": True},
+        )
+        self.assertEqual(
+            SesameRobotController("mock").stop(),
+            {"status": "success", "mock": True},
+        )
 
     def test_ai_missing_command_is_recovered_from_direct_request(self):
         robot = FakeRobot()
@@ -156,7 +172,34 @@ class CommandReliabilityTests(unittest.TestCase):
             "do a dance!",
         )
         self.assertEqual(voice._extract_wake_remainder("Hey Sesame"), "")
+        self.assertEqual(
+            voice._extract_wake_remainder("Hey Sesame, Hey Sesame, Hey Sesame!"),
+            "",
+        )
         self.assertIsNone(voice._extract_wake_remainder("good morning friend"))
+
+    def test_hallucination_filter_blocks_repetitions_and_foreign_scripts(self):
+        voice = VoiceInterface(voice_enabled=True)
+        voice.voice_language = "en"
+
+        # Repeated wake-word loop from exhibition hall noise
+        self.assertIsNone(
+            voice._filter_hallucination("Hey Sesame, Hey Sesame, Hey Sesame, Hey Sesame.")
+        )
+        # Random Japanese & Urdu noise hallucinations
+        self.assertIsNone(voice._filter_hallucination("ご視聴ありがとうございました"))
+        self.assertIsNone(voice._filter_hallucination("آپ کا بہت شکریہ"))
+        # Common Whisper silence hallucinations
+        self.assertIsNone(voice._filter_hallucination("Thank you for watching."))
+        # Legitimate English commands pass cleanly
+        self.assertEqual(
+            voice._filter_hallucination("Do a happy dance for me!"),
+            "Do a happy dance for me!",
+        )
+
+    def test_close_talk_threshold_enforces_4000_floor_and_scales_in_loud_hall(self):
+        self.assertEqual(VoiceInterface.compute_exhibition_threshold(120.0, 4000.0), 4000.0)
+        self.assertEqual(VoiceInterface.compute_exhibition_threshold(2000.0, 4000.0), 5400.0)
 
     def test_api_exposes_only_safe_public_methods_for_pywebview(self):
         api = Api()
@@ -183,6 +226,132 @@ class CommandReliabilityTests(unittest.TestCase):
         result = api.toggle_listening()
 
         self.assertEqual(result, {"text": "wave"})
+
+    def test_hybrid_ai_auto_fails_over_from_cloud_to_local_ollama(self):
+        hybrid = HybridAIInterface(groq_api_key=None, ollama_model="qwen2.5:0.5b", mode="auto")
+        hybrid.personality = "intelligent"
+        self.assertEqual(hybrid.groq.personality, "intelligent")
+        self.assertEqual(hybrid.ollama.personality, "intelligent")
+
+        hybrid.ollama.try_interpret = lambda text: {
+            "command": None,
+            "face": "happy",
+            "response": "You have got this, friend!",
+            "reasoning": "Intelligent companion encouragement",
+            "source": "ollama:qwen2.5:0.5b",
+        }
+
+        result = hybrid.interpret_command("Give me a quick pep talk")
+        self.assertEqual(result["source"], "ollama:qwen2.5:0.5b")
+        self.assertIsNone(result["command"])
+        self.assertEqual(result["face"], "happy")
+
+    def test_ollama_interface_keeps_chat_motor_safe_and_honors_tricks(self):
+        ollama = OllamaInterface(model="qwen2.5:0.5b")
+
+        class FakeResp:
+            status_code = 200
+
+            def __init__(self, payload_text):
+                self._payload_text = payload_text
+
+            def json(self):
+                return {"message": {"content": self._payload_text}}
+
+        # Even if a tiny 0.5B model tries to set a random command during pure Q&A, it stays None
+        with patch(
+            "sesame_companion.requests.post",
+            return_value=FakeResp('{"command":"swim","face":"happy","response":"Here is a joke!","reasoning":"fun"}'),
+        ):
+            chat_res = ollama.interpret_command("Tell me a short funny joke!")
+            self.assertIsNone(chat_res["command"])
+            self.assertEqual(chat_res["face"], "happy")
+
+        # Direct trick requests always execute the requested command
+        with patch(
+            "sesame_companion.requests.post",
+            return_value=FakeResp('{"command":"crab","face":null,"response":"Sideways crab time!","reasoning":"trick"}'),
+        ):
+            trick_res = ollama.interpret_command("Do a crab walk!")
+            self.assertEqual(trick_res["command"], "crab")
+            self.assertIsNone(trick_res["face"])
+
+    def test_api_updates_robot_ip_and_ai_mode_cleanly(self):
+        api = Api()
+        with patch.object(Api, "_save_env_key") as save_mock:
+            ip_res = api.update_setting("robot_ip", "http://192.168.43.108/")
+            self.assertEqual(ip_res["ip"], "192.168.43.108")
+            self.assertEqual(api._robot_ip, "192.168.43.108")
+            save_mock.assert_any_call("SESAME_ROBOT_IP", "192.168.43.108")
+
+            mode_res = api.update_setting("ai_mode", "ollama")
+            self.assertEqual(api._ai_mode, "ollama")
+            self.assertIn("ollama", mode_res["message"])
+            save_mock.assert_any_call("AI_PROVIDER", "ollama")
+
+    def test_emoji_filter_strips_emojis_from_ai_and_tts(self):
+        raw = "Hey there, professors! Ready to wave your arms around? 🐍\n👋"
+        self.assertEqual(
+            strip_emojis(raw),
+            "Hey there, professors! Ready to wave your arms around?",
+        )
+        normalized = normalize_interpretation({"command": "wave", "face": "happy", "response": raw})
+        self.assertEqual(
+            normalized["response"],
+            "Hey there, professors! Ready to wave your arms around?",
+        )
+        self.assertEqual(
+            VoiceInterface._clean_tts_text(raw + " [happy face]"),
+            "Hey there, professors! Ready to wave your arms around?",
+        )
+
+    def test_cute_buddy_voice_shifts_vocal_tract_and_updates_style(self):
+        import numpy as np
+        src = (np.sin(np.linspace(0, 50.0, 4000)) * 12000.0).astype(np.float32)
+        shifted, out_rate, wav_bytes = VoiceInterface._shift_vocal_tract_to_wav(
+            src, orig_rate=16000, pitch_factor=1.32, out_rate=24000
+        )
+        self.assertEqual(out_rate, 24000)
+        self.assertGreater(len(wav_bytes), 44)
+        self.assertGreater(shifted.size, 0)
+
+        api = Api()
+        with patch.object(Api, "_save_env_key") as save_mock:
+            res = api.update_setting("voice_style", "silly")
+            self.assertEqual(api._voice_style, "silly")
+            self.assertIn("silly", res["message"])
+            save_mock.assert_any_call("PIPER_VOICE_STYLE", "silly")
+
+    def test_study_coach_retains_rolling_conversation_history(self):
+        hybrid = HybridAIInterface(groq_api_key=None, ollama_model="qwen2.5:0.5b", mode="ollama")
+        hybrid.personality = "intelligent"
+
+        captured_messages = []
+
+        class FakeResp:
+            status_code = 200
+
+            def __init__(self, text):
+                self._text = text
+
+            def json(self):
+                return {"message": {"content": self._text}}
+
+        def fake_post(_url, json=None, timeout=None):
+            captured_messages.append(list(json["messages"]))
+            if len(captured_messages) == 1:
+                return FakeResp('{"command":null,"face":"happy","response":"Sure! What gas do plants absorb during photosynthesis?"}')
+            return FakeResp('{"command":null,"face":"excited","response":"Spot on! Carbon dioxide is right!"}')
+
+        with patch("sesame_companion.requests.post", side_effect=fake_post):
+            hybrid.interpret_command("I am studying photosynthesis, quiz me!")
+            second = hybrid.interpret_command("Is it carbon dioxide?")
+
+        self.assertEqual(second["face"], "excited")
+        # Turn 2 includes system + Turn 1 user + Turn 1 assistant + Turn 2 user = 4 messages
+        self.assertEqual(len(captured_messages[1]), 4)
+        self.assertIn("photosynthesis", captured_messages[1][1]["content"])
+        self.assertIn("What gas do plants absorb", captured_messages[1][2]["content"])
 
 
 if __name__ == "__main__":

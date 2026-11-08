@@ -42,7 +42,7 @@ INTELLIGENT_RESPONSES = {
 
 COMMAND_KEYWORDS = {
     "walk": ("walk", "move forward"),
-    "rest": ("rest", "take a rest", "relax"),
+    "rest": ("rest", "take a rest", "relax", "stop"),
     "swim": ("swim",),
     "dance": ("dance",),
     "wave": ("wave", "say hi", "say hello"),
@@ -58,7 +58,6 @@ COMMAND_KEYWORDS = {
     "dead": ("dead", "play dead"),
     "crab": ("crab walk", "crab"),
     "idle": ("idle",),
-    "stop": ("stop",),
 }
 
 
